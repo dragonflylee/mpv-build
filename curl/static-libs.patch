@@ -1,0 +1,17 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index e459b3d076..c67bfe7c8a 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -366,11 +366,7 @@ else()
+ endif()
+ 
+ # Lib flavor selected for example and test programs.
+-if(BUILD_SHARED_LIBS)
+-  set(LIB_SELECTED ${LIB_SHARED})
+-else()
+-  set(LIB_SELECTED ${LIB_STATIC})
+-endif()
++set(LIB_SELECTED ${LIB_STATIC})
+ 
+ if(WIN32)
+   option(CURL_STATIC_CRT "Build libcurl with static CRT with MSVC (/MT)" OFF)
