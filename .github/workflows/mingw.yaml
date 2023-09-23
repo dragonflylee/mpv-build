@@ -1,0 +1,56 @@
+name: mingw
+
+on:
+  push:
+    branches: [ mingw ]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - { sys: mingw64, env: x86_64 }
+        - { sys: mingw32, env: i686 }
+        - { sys: clangarm64, env: clang-aarch64 }
+    name: ${{ matrix.sys }}
+    runs-on: ${{ contains(matrix.sys, 'arm64') && 'windows-11-arm' || 'windows-latest' }}
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+    - uses: msys2/setup-msys2@v2
+      with:
+        msystem: ${{matrix.sys}}
+        cache: false
+        release: ${{ contains(matrix.sys, 'arm64') }}
+        install: >-
+          patch
+          p7zip
+          make
+          diffutils
+          mingw-w64-${{matrix.env}}-nasm
+          mingw-w64-${{matrix.env}}-meson
+          mingw-w64-${{matrix.env}}-cmake
+          mingw-w64-${{matrix.env}}-cc
+    - name: Disable autocrlf
+      shell: bash
+      run: git config --global core.autocrlf false
+    - uses: actions/checkout@v6
+    - name: Build packages
+      run: |
+        for pkg in mbedtls freetype harfbuzz libass dav1d ffmpeg spirv-headers spirv-tools glslang spirv-cross shaderc libplacebo mpv; do
+          echo building $p
+          pushd $pkg; makepkg-mingw -sciCf --noconfirm; popd
+        done
+    - name: Upload packages
+      uses: softprops/action-gh-release@v3
+      with:
+        tag_name: mingw-package
+        prerelease: true
+        files: mpv/*.pkg.tar.zst
+        body: |
+          ![download](https://img.shields.io/github/downloads/${{ github.repository }}/mingw-package/total?label=Downloads)
