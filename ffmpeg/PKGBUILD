@@ -1,0 +1,62 @@
+# Maintainer: Dave Murphy <davem@devkitpro.org>
+# Contributor: averne <averne381@gmail.com>
+# Contributor: Ezekiel Bethel <stary@9net.org>
+# Contributor: carstene1ns <dev f4ke de>
+# Contributor: jakibaki <jakibaki live com>
+
+pkgname=switch-ffmpeg
+pkgver=7.1.3
+pkgrel=5
+pkgdesc='ffmpeg port (for Nintendo Switch homebrew development)'
+arch=('any')
+url='https://ffmpeg.org/'
+license=('GPL')
+options=(!strip staticlibs)
+makedepends=('switch-pkg-config' 'dkp-toolchain-vars')
+depends=('switch-zlib' 'switch-bzip2' 'switch-libass' 'switch-libfribidi'
+         'switch-freetype' 'switch-mbedtls' 'switch-dav1d')
+source=("https://ffmpeg.org/releases/ffmpeg-${pkgver}.tar.xz" "ffmpeg-${pkgver}.patch" "getnameinfo.patch")
+sha256sums=('f0bf043299db9e3caacb435a712fc541fbb07df613c4b893e8b77e67baf3adbe' 'SKIP' 'SKIP')
+
+groups=('switch-portlibs')
+
+prepare() {
+  cd ffmpeg-$pkgver
+  patch -Np1 -i "$srcdir/ffmpeg-${pkgver}.patch"
+  patch -Np1 -i "$srcdir/getnameinfo.patch"
+}
+
+build() {
+  cd ffmpeg-$pkgver
+
+  source ${DEVKITPRO}/switchvars.sh
+
+  ./configure --prefix=$PORTLIBS_PREFIX --enable-gpl --disable-shared --enable-static \
+    --cross-prefix=aarch64-none-elf- --enable-cross-compile \
+    --arch=aarch64 --cpu=cortex-a57 --target-os=horizon --enable-pic \
+    --extra-cflags='-D__SWITCH__ -D_GNU_SOURCE -O2 -march=armv8-a -mtune=cortex-a57 -mtp=soft -fPIC -ftls-model=local-exec' \
+    --extra-cxxflags='-D__SWITCH__ -D_GNU_SOURCE -O2 -march=armv8-a -mtune=cortex-a57 -mtp=soft -fPIC -ftls-model=local-exec' \
+    --extra-ldflags='-fPIE -L${PORTLIBS_PREFIX}/lib -L${DEVKITPRO}/libnx/lib' \
+    --disable-runtime-cpudetect --disable-programs --disable-debug --disable-doc --disable-autodetect \
+    --enable-asm --enable-neon --disable-avdevice --disable-encoders --disable-muxers \
+    --enable-swscale --enable-swresample --enable-network  \
+    --disable-decoders --enable-decoder=flac,aac,opus,mp3,h264,hevc,libdav1d \
+    --disable-demuxers --enable-demuxer=mov,flv,hls \
+    --disable-protocols --enable-protocol=file,http,tcp,udp,hls,https,tls,rtp,crypto,httpproxy \
+    --enable-zlib --enable-bzlib --enable-libass --enable-libdav1d \
+    --enable-mbedtls --enable-version3 --enable-nvtegra \
+    --disable-filters --enable-filter=hflip,vflip,transpose
+
+  make -j$(nproc)
+}
+
+package() {
+  cd ffmpeg-$pkgver
+
+  source ${DEVKITPRO}/switchvars.sh
+
+  make DESTDIR="$pkgdir" install
+
+  # remove examples
+  rm -r "$pkgdir"${PORTLIBS_PREFIX}/share
+}

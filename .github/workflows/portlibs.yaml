@@ -1,0 +1,45 @@
+name: portlibs
+
+on:
+  push:
+    branches: [ switch ]
+
+permissions:
+  contents: write
+
+jobs:
+  build-portlibs:
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkita64:latest
+    steps:
+    - name: Disable autocrlf
+      run: git config --global core.autocrlf false
+    - uses: actions/checkout@v6
+    - name: Install dependency
+      run: |
+        apt-get update
+        apt-get install -y fakeroot zstd bison flex libtool python3-pip manpages-
+        pip3 install meson mako --break-system-packages
+    - name: Build portlibs
+      run: |
+        adduser --gecos '' --home ${GITHUB_WORKSPACE} --disabled-password builder
+        echo 'builder ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/builder
+
+        chown -R builder:builder ${GITHUB_WORKSPACE}
+        for pkg in ffmpeg libuam; do
+          echo building $pkg
+          su - builder -c "cd $pkg && dkp-makepkg -sciCf --noconfirm"
+        done
+        for pkg in curl mpv nspmini hacbrewpack; do
+          echo building \$pkg
+          su - builder -c "cd $pkg && dkp-makepkg -scCf --noconfirm"
+        done
+    - name: Upload portlibs
+      uses: softprops/action-gh-release@v3
+      with:
+        tag_name: switch-portlibs
+        prerelease: true
+        files: "*/*.pkg.tar.zst"
+        body: |
+          ![download](https://img.shields.io/github/downloads/${{ github.repository }}/switch-portlibs/total?label=Downloads)
