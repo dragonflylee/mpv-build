@@ -1,0 +1,50 @@
+name: dylib
+
+on:
+  push:
+    branches: [ macos ]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - tag: AppleSilicon
+          arch: arm64
+        - tag: IntelChip
+          arch: x86_64
+        tag: [ IntelChip, AppleSilicon ]
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v6
+    - name: Remove stray upstream python binary symlinks under /usr/local
+      run: |
+        find /usr/local/bin -lname '*/Library/Frameworks/Python.framework/*' -delete -print
+        brew unlink python && brew link --overwrite python
+    - name: Install dependency
+      run: brew reinstall ninja nasm meson
+    - name: Build dylib
+      run: make OSX_ARCH=${{ matrix.arch }} TMPDIR=${{ runner.temp }} PREFIX=${{ runner.temp }}
+    - name: Build packages
+      run: tar zcf dylib-ffmpeg8-mpv41-${{ matrix.tag }}.tar.gz --exclude=lib/*.a -C ${{ runner.temp }} include lib
+    - name: Archive Build Logs
+      if: ${{ failure() }}
+      uses: actions/upload-artifact@v6
+      with:
+        name: logs-${{ matrix.tag }}
+        path: |
+          build/ffmpeg/ffbuild
+          build/*/meson-logs
+    - name: Upload packages
+      uses: softprops/action-gh-release@v3
+      with:
+        name: macos-dylib
+        tag_name: macos-dylib
+        prerelease: true
+        files: dylib-*.tar.gz
+        body: |
+          ![download](https://img.shields.io/github/downloads/${{ github.repository }}/macos-dylib/total?label=Downloads)
