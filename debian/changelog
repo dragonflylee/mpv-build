@@ -1,0 +1,6 @@
+mpv (0.41.0-2) unstable; urgency=medium
+
+  [ Diederik de Haas ]
+  * d/copyright: Update for moved files
+
+ -- Sebastian Ramacher <sramacher@debian.org>  Sun, 21 Dec 2025 18:43:53 +0200

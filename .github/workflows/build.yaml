@@ -1,0 +1,58 @@
+name: deb
+
+on:
+  push:
+    branches: [ armbian ]
+
+jobs:
+  build-deb:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - { img: ubuntu, tag: jammy }
+        - { img: ubuntu, tag: noble }
+        - { img: debian, tag: bookworm }
+        - { img: debian, tag: trixie }
+        - { arch: x86_64, runner: ubuntu-24.04 }
+        - { arch: aarch64, runner: ubuntu-24.04-arm }
+        arch: [ x86_64, aarch64 ]
+        tag: [ jammy, noble, bookworm, trixie ]
+    runs-on: ${{ matrix.runner }}
+    container:
+      image: ${{ matrix.img }}:${{ matrix.tag }}
+    steps:
+    - name: Install dependency
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        apt-get update
+        apt-get install -y --no-install-recommends debhelper cmake build-essential ninja-build nasm python3-setuptools wget git \
+          ca-certificates xorg-dev libxpresent-dev libwayland-dev libxkbcommon-dev wayland-protocols libegl-dev libv4l-dev \
+          libpulse-dev libuchardet-dev libva-dev libvdpau-dev libudev-dev libdrm-dev libgbm-dev libssl-dev liblua5.2-dev
+        wget -qO- https://github.com/mesonbuild/meson/archive/1.9.0.tar.gz | tar zxf - -C /tmp
+        cd /tmp/meson-1.9.0 && python3 setup.py install > /dev/null 2>&1
+    - uses: actions/checkout@v6
+    - name: Build deb
+      env:
+        DH_QUIET: "1"
+      run: |
+        make -f debian/rules depends
+        dpkg-buildpackage -b -nc
+        mv ../*.deb $GITHUB_WORKSPACE
+    - name: Archive Build Logs
+      if: ${{ failure() }}
+      uses: actions/upload-artifact@v6
+      with:
+        name: logs-${{ matrix.tag }}-${{ matrix.arch }}
+        path: |
+          build-ffmpeg/ffbuild
+          build-*/meson-logs
+    - name: Upload Assets
+      uses: actions/upload-artifact@v6
+      with:
+        name: mpv-${{ matrix.img }}-${{ matrix.tag }}-${{ matrix.arch }}-${{ github.run_number }}
+        path: |
+          mpv_*.deb
+          libmpv2_*.deb
+          libmpv-dev_*.deb
