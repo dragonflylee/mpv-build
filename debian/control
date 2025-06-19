@@ -1,0 +1,57 @@
+Source: mpv
+Section: video
+Priority: optional
+Maintainer: Debian Multimedia Maintainers <debian-multimedia@lists.debian.org>
+Build-Depends:
+ debhelper (>= 10),
+ cmake,
+ ninja-build,
+ libegl-dev,
+ libgbm-dev,
+ libpulse-dev,
+ libuchardet-dev,
+ libudev-dev,
+ libv4l-dev,
+ libva-dev,
+ libvdpau-dev,
+ libwayland-dev,
+ libx11-dev,
+ libxkbcommon-dev,
+ libxpresent-dev,
+ wayland-protocols
+Vcs-Git: https://salsa.debian.org/multimedia-team/mpv.git
+
+Package: mpv
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Recommends: yt-dlp
+Description: video player based on MPlayer/mplayer2
+ mpv is a movie player based on MPlayer and mplayer2. It supports a wide
+ variety of video file formats, audio and video codecs, and subtitle types.
+
+Package: libmpv2
+Section: libs
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Pre-Depends: ${misc:Pre-Depends}
+Recommends: va-driver-all
+Multi-Arch: same
+Description: video player based on MPlayer/mplayer2 (client library)
+ mpv is a movie player based on MPlayer and mplayer2. It supports a wide
+ variety of video file formats, audio and video codecs, and subtitle types.
+ .
+ This package provides a client library that can be used to embed mpv in other
+ applications.
+
+Package: libmpv-dev
+Section: libdevel
+Architecture: any
+Depends:
+ libmpv2 (= ${binary:Version}),
+ ${misc:Depends}
+Multi-Arch: same
+Description: video player based on MPlayer/mplayer2 (client library dev files)
+ mpv is a movie player based on MPlayer and mplayer2. It supports a wide
+ variety of video file formats, audio and video codecs, and subtitle types.
+ .
+ This package provides development files for libmpv.
