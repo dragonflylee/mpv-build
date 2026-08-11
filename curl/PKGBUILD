@@ -4,7 +4,7 @@ _realname=curl
 pkgbase=mingw-w64-${_realname}
 pkgname=${MINGW_PACKAGE_PREFIX}-${_realname}
 pkgver=8.21.0
-pkgrel=1
+pkgrel=2
 pkgdesc="library for transferring data with URLs (mingw-w64)"
 arch=('any')
 mingw_arch=('mingw32' 'mingw64' 'clangarm64')
@@ -18,8 +18,13 @@ makedepends=(
 depends=(
   "${MINGW_PACKAGE_PREFIX}-zlib"
 )
-source=("https://curl.haxx.se/download/${_realname}-${pkgver}.tar.xz")
-sha256sums=('aa1b66a70eace83dc624508745646c08ae561de512ab403adffb93ac87fc72e6')
+source=("https://curl.haxx.se/download/${_realname}-${pkgver}.tar.xz" "static-libs.patch")
+sha256sums=('aa1b66a70eace83dc624508745646c08ae561de512ab403adffb93ac87fc72e6' 'SKIP')
+
+prepare() {
+  cd "${srcdir}/${_realname}-${pkgver}"
+  patch -Nbp1 -i "${srcdir}/static-libs.patch"
+}
 
 build() {
   MSYS2_ARG_CONV_EXCL="-DCMAKE_INSTALL_PREFIX=" \
