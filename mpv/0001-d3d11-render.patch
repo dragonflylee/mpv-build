@@ -1,119 +1,8 @@
-diff --git a/audio/decode/ad_spdif.c b/audio/decode/ad_spdif.c
-index decd97206d..e57843413f 100644
---- a/audio/decode/ad_spdif.c
-+++ b/audio/decode/ad_spdif.c
-@@ -53,7 +53,11 @@ struct spdifContext {
-     struct mp_decoder public;
- };
- 
-+#if LIBAVCODEC_VERSION_MAJOR < 61
- static int write_packet(void *p, uint8_t *buf, int buf_size)
-+#else
-+static int write_packet(void *p, const uint8_t *buf, int buf_size)
-+#endif
- {
-     struct spdifContext *ctx = p;
- 
-diff --git a/audio/out/ao_wasapi_utils.c b/audio/out/ao_wasapi_utils.c
-index 97a8e17b2f..c3d6e6eb4e 100644
---- a/audio/out/ao_wasapi_utils.c
-+++ b/audio/out/ao_wasapi_utils.c
-@@ -20,8 +20,15 @@
- #include <math.h>
- #include <wchar.h>
- #include <windows.h>
--#include <errors.h>
-+// Workaround for redefinition of some guids in mingw. ks.h has to be included
-+// before other ks*.h headers, but mingw fails then.
-+#ifdef __MINGW32__
-+#include <mmreg.h>
- #include <ksguid.h>
-+#else
-+#include <ksguid.h>
-+#include <mmreg.h>
-+#endif
- #include <ksmedia.h>
- #include <avrt.h>
- 
-diff --git a/filters/f_lavfi.c b/filters/f_lavfi.c
-index 597cf91fc0..c0596d32eb 100644
---- a/filters/f_lavfi.c
-+++ b/filters/f_lavfi.c
-@@ -1024,7 +1024,11 @@ static const char *get_avopt_type_name(enum AVOptionType type)
-     case AV_OPT_TYPE_VIDEO_RATE:        return "fps";
-     case AV_OPT_TYPE_DURATION:          return "duration";
-     case AV_OPT_TYPE_COLOR:             return "color";
-+#if LIBAVUTIL_VERSION_MAJOR < 59
-     case AV_OPT_TYPE_CHANNEL_LAYOUT:    return "channellayout";
-+#else
-+    case AV_OPT_TYPE_CHLAYOUT:          return "channellayout";
-+#endif
-     case AV_OPT_TYPE_BOOL:              return "bool";
-     case AV_OPT_TYPE_CONST: // fallthrough
-     default:
-diff --git a/filters/f_swresample.c b/filters/f_swresample.c
-index fb1ef05194..09148b5f88 100644
---- a/filters/f_swresample.c
-+++ b/filters/f_swresample.c
-@@ -23,6 +23,7 @@
- #include <libswresample/swresample.h>
- 
- #include "audio/aframe.h"
-+#include "audio/chmap_avchannel.h"
- #include "audio/fmt-conversion.h"
- #include "audio/format.h"
- #include "common/common.h"
-@@ -269,14 +270,28 @@ static bool configure_lavrr(struct priv *p, bool verbose)
- 
-     out_ch_layout = fudge_layout_conversion(p, in_ch_layout, out_ch_layout);
- 
-+#if HAVE_AV_CHANNEL_LAYOUT
-     // Real conversion; output is input to avrctx_out.
-+    AVChannelLayout in_layout, out_layout;
-+    mp_chmap_to_av_layout(&in_layout, &in_lavc);
-+    mp_chmap_to_av_layout(&out_layout, &out_lavc);
-+    av_opt_set_chlayout(p->avrctx, "in_chlayout",  &in_layout, 0);
-+    av_opt_set_chlayout(p->avrctx, "out_chlayout", &out_layout, 0);
-+#else
-     av_opt_set_int(p->avrctx, "in_channel_layout",  in_ch_layout, 0);
-     av_opt_set_int(p->avrctx, "out_channel_layout", out_ch_layout, 0);
-+#endif
-     av_opt_set_int(p->avrctx, "in_sample_rate",     p->in_rate, 0);
-     av_opt_set_int(p->avrctx, "out_sample_rate",    p->out_rate, 0);
-     av_opt_set_int(p->avrctx, "in_sample_fmt",      in_samplefmt, 0);
-     av_opt_set_int(p->avrctx, "out_sample_fmt",     out_samplefmtp, 0);
- 
-+#if HAVE_AV_CHANNEL_LAYOUT
-+    AVChannelLayout fake_layout;
-+    av_channel_layout_default(&fake_layout, map_out.num);
-+    av_opt_set_chlayout(p->avrctx_out, "in_chlayout", &fake_layout, 0);
-+    av_opt_set_chlayout(p->avrctx_out, "out_chlayout", &fake_layout, 0);
-+#else
-     // Just needs the correct number of channels for deplanarization.
-     struct mp_chmap fake_chmap;
-     mp_chmap_set_unknown(&fake_chmap, map_out.num);
-@@ -285,6 +300,7 @@ static bool configure_lavrr(struct priv *p, bool verbose)
-         goto error;
-     av_opt_set_int(p->avrctx_out, "in_channel_layout",  fake_out_ch_layout, 0);
-     av_opt_set_int(p->avrctx_out, "out_channel_layout", fake_out_ch_layout, 0);
-+#endif
- 
-     av_opt_set_int(p->avrctx_out, "in_sample_fmt",      out_samplefmtp, 0);
-     av_opt_set_int(p->avrctx_out, "out_sample_fmt",     out_samplefmt, 0);
-diff --git a/libmpv/mpv.def b/libmpv/mpv.def
-index 232490d44d..8e0171abce 100644
---- a/libmpv/mpv.def
-+++ b/libmpv/mpv.def
-@@ -1,3 +1,4 @@
-+EXPORTS
- mpv_abort_async_command
- mpv_client_api_version
- mpv_client_id
-diff --git a/libmpv/render.h b/libmpv/render.h
-index 29f9b91e96..d3cefdcde4 100644
---- a/libmpv/render.h
-+++ b/libmpv/render.h
-@@ -421,6 +421,10 @@ typedef enum mpv_render_param_type {
+diff --git a/include/mpv/render.h b/include/mpv/render.h
+index 99aadeb5d8..0bb33d4e56 100644
+--- a/include/mpv/render.h
++++ b/include/mpv/render.h
+@@ -422,6 +422,10 @@ typedef enum mpv_render_param_type {
       * See MPV_RENDER_PARAM_SW_STRIDE for alignment requirements.
       */
      MPV_RENDER_PARAM_SW_POINTER = 20,
@@ -124,7 +13,7 @@ index 29f9b91e96..d3cefdcde4 100644
  } mpv_render_param_type;
  
  /**
-@@ -467,6 +471,8 @@ typedef struct mpv_render_param {
+@@ -468,6 +472,8 @@ typedef struct mpv_render_param {
  #define MPV_RENDER_API_TYPE_OPENGL "opengl"
  // See section "Software renderer"
  #define MPV_RENDER_API_TYPE_SW "sw"
@@ -133,11 +22,11 @@ index 29f9b91e96..d3cefdcde4 100644
  
  /**
   * Flags used in mpv_render_frame_info.flags. Each value represents a bit in it.
-diff --git a/libmpv/render_dxgi.h b/libmpv/render_dxgi.h
+diff --git a/include/mpv/render_dxgi.h b/include/mpv/render_dxgi.h
 new file mode 100644
 index 0000000000..5614cc99d9
 --- /dev/null
-+++ b/libmpv/render_dxgi.h
++++ b/include/mpv/render_dxgi.h
 @@ -0,0 +1,18 @@
 +#ifndef MPV_CLIENT_API_RENDER_DXGI_H_
 +#define MPV_CLIENT_API_RENDER_DXGI_H_
@@ -158,10 +47,42 @@ index 0000000000..5614cc99d9
 +#endif
 +#endif // MPV_CLIENT_API_RENDER_DXGI_H_
 diff --git a/meson.build b/meson.build
-index f9fe4e7263..f7176c7a06 100644
+index fb10be5078..d31b5e875f 100644
 --- a/meson.build
 +++ b/meson.build
-@@ -980,7 +980,8 @@ d3d11 = get_option('d3d11').require(
+@@ -320,7 +320,7 @@ features += {'darwin': darwin}
+ features += {'posix': posix}
+ features += {'dos-paths': win32, 'win32': win32}
+ 
+-mswin_flags = ['-D_WIN32_WINNT=0x0A00', '-DWINVER=0x0A00', '-DUNICODE',
++mswin_flags = ['-D_WIN32_WINNT=0x0602', '-DWINVER=0x0602', '-DUNICODE',
+                '-DCOBJMACROS', '-DINITGUID', '-DNOMINMAX',
+                '-D_USE_MATH_DEFINES', '-DWIN32_LEAN_AND_MEAN',
+                '-D_CRT_DECLARE_NONSTDC_NAMES', '-D_CRT_NONSTDC_NO_WARNINGS',
+@@ -503,7 +503,6 @@ if features['win32-desktop']
+                           cc.find_library('imm32'),
+                           cc.find_library('ntdll'),
+                           cc.find_library('ole32'),
+-                          cc.find_library('pathcch'),
+                           cc.find_library('shcore'),
+                           cc.find_library('user32'),
+                           cc.find_library('uuid'),
+@@ -516,11 +515,13 @@ if features['win32-desktop']
+     else
+         sources += files('osdep/subprocess-dummy.c')
+     endif
++    if features['win32-executable']
++        sources += files('osdep/w32_register.c')
++    endif
+     sources += files('input/ipc-win.c',
+                      'player/clipboard/clipboard-win.c',
+                      'osdep/language-win.c',
+                      'osdep/terminal-win.c',
+-                     'osdep/w32_register.c',
+                      'video/out/w32_common.c',
+                      'video/out/win32/displayconfig.c',
+                      'video/out/win32/droptarget.c',
+@@ -1029,7 +1030,8 @@ d3d11 = get_option('d3d11').require(
  features += {'d3d11': d3d11.allowed()}
  if features['d3d11']
      sources += files('video/out/d3d11/context.c',
@@ -171,243 +92,90 @@ index f9fe4e7263..f7176c7a06 100644
  endif
  
  wayland = {
-@@ -1725,7 +1726,11 @@ if get_option('libmpv')
+@@ -1797,6 +1799,9 @@ if get_option('libmpv')
  
-     headers = ['libmpv/client.h', 'libmpv/render.h',
-                'libmpv/render_gl.h', 'libmpv/stream_cb.h']
+     headers = ['include/mpv/client.h', 'include/mpv/render.h',
+                'include/mpv/render_gl.h', 'include/mpv/stream_cb.h']
 +    if features['d3d11']
-+        headers += 'libmpv/render_dxgi.h'
++        headers += 'include/mpv/render_dxgi.h'
 +    endif
      install_headers(headers, subdir: 'mpv')
-+    install_data(sources: 'libmpv/mpv.def', install_dir: 'share/doc/mpv')
- endif
  
- if get_option('cplayer')
-diff --git a/misc/language.c b/misc/language.c
-index 92857f75b4..f9eb696f49 100644
---- a/misc/language.c
-+++ b/misc/language.c
-@@ -29,8 +29,8 @@
- #include <strings.h>
+     # Allow projects to build with libmpv by cloning into ./subprojects/mpv
+diff --git a/misc/path_utils.c b/misc/path_utils.c
+index af56162aa6..dcb04c3fb2 100644
+--- a/misc/path_utils.c
++++ b/misc/path_utils.c
+@@ -34,7 +34,7 @@
+ #include "misc/ctype.h"
+ #include "misc/path_utils.h"
  
- static const struct lang {
--    char match[4];
--    char canonical[4];
-+    char match[4] MP_NONSTRING;
-+    char canonical[4] MP_NONSTRING;
- } langmap[] = {
-     {"aa", "aar"},
-     {"ab", "abk"},
-diff --git a/options/m_config_core.c b/options/m_config_core.c
-index 4f8c462db1..0e6f71c68b 100644
---- a/options/m_config_core.c
-+++ b/options/m_config_core.c
-@@ -105,8 +105,6 @@ struct m_group_data {
-     uint64_t ts;        // timestamp of the data copy
- };
- 
--static const union m_option_value default_value = {0};
--
- static void add_sub_group(struct m_config_shadow *shadow, const char *name_prefix,
-                           int parent_group_index, int parent_ptr,
-                           const struct m_sub_options *subopts);
-@@ -241,7 +239,7 @@ const void *m_config_shadow_get_opt_default(struct m_config_shadow *shadow,
-     if (subopt->defaults)
-         return (char *)subopt->defaults + opt->offset;
- 
--    return &default_value;
-+    return &m_option_value_default;
- }
- 
- void *m_config_cache_get_opt_data(struct m_config_cache *cache, int32_t id)
-diff --git a/options/m_config_frontend.c b/options/m_config_frontend.c
-index 5a6db46d83..e2f492bdd6 100644
---- a/options/m_config_frontend.c
-+++ b/options/m_config_frontend.c
-@@ -758,7 +758,7 @@ int m_config_set_option_cli(struct m_config *config, struct bstr name,
-                    BSTR_P(name), BSTR_P(param), flags);
-     }
- 
--    union m_option_value val = {0};
-+    union m_option_value val = m_option_value_default;
- 
-     // Some option types are "impure" and work on the existing data.
-     // (Prime examples: --vf-add, --sub-file)
-@@ -792,7 +792,7 @@ int m_config_set_option_node(struct m_config *config, bstr name,
- 
-     // Do this on an "empty" type to make setting the option strictly overwrite
-     // the old value, as opposed to e.g. appending to lists.
--    union m_option_value val = {0};
-+    union m_option_value val = m_option_value_default;
- 
-     if (data->format == MPV_FORMAT_STRING) {
-         bstr param = bstr0(data->u.string);
-@@ -877,9 +877,8 @@ void m_config_print_option_list(const struct m_config *config, const char *name)
-         }
-         char *def = NULL;
-         const void *defptr = m_config_get_co_default(config, co);
--        const union m_option_value default_value = {0};
-         if (!defptr)
--            defptr = &default_value;
-+            defptr = &m_option_value_default;
-         if (defptr)
-             def = m_option_pretty_print(opt, defptr);
-         if (def) {
-diff --git a/options/m_option.h b/options/m_option.h
-index bcdc1f9fcc..ce9ddab4bb 100644
---- a/options/m_option.h
-+++ b/options/m_option.h
-@@ -253,6 +253,11 @@ union m_option_value {
-     struct m_channels channels;
- };
- 
-+// Keep fully zeroed instance of m_option_value to use as a default value, before
-+// any specific union member is used. C standard says that `= {0}` activates and
-+// initializes only the first member of the union, leaving padding bits undefined.
-+static const union m_option_value m_option_value_default;
-+
- ////////////////////////////////////////////////////////////////////////////
- 
- struct m_option_action {
-diff --git a/options/m_property.c b/options/m_property.c
-index fa91fd1162..ff088efb6c 100644
---- a/options/m_property.c
-+++ b/options/m_property.c
-@@ -38,7 +38,7 @@ static int m_property_multiply(struct mp_log *log,
-                                const struct m_property *prop_list,
-                                const char *property, double f, void *ctx)
- {
--    union m_option_value val = {0};
-+    union m_option_value val = m_option_value_default;
-     struct m_option opt = {0};
-     int r;
- 
-@@ -98,7 +98,7 @@ static int do_action(const struct m_property *prop_list, const char *name,
- int m_property_do(struct mp_log *log, const struct m_property *prop_list,
-                   const char *name, int action, void *arg, void *ctx)
- {
--    union m_option_value val = {0};
-+    union m_option_value val = m_option_value_default;
-     int r;
- 
-     struct m_option opt = {0};
-@@ -545,7 +545,7 @@ int m_property_read_list(int action, void *arg, int count,
-                 r = get_item(n, M_PROPERTY_GET_TYPE, &opt, ctx);
-                 if (r != M_PROPERTY_OK)
-                     goto err;
--                union m_option_value val = {0};
-+                union m_option_value val = m_option_value_default;
-                 r = get_item(n, M_PROPERTY_GET, &val, ctx);
-                 if (r != M_PROPERTY_OK)
-                     goto err;
-diff --git a/osdep/compiler.h b/osdep/compiler.h
-index 37431e60eb..6b76a4b719 100644
---- a/osdep/compiler.h
-+++ b/osdep/compiler.h
-@@ -13,6 +13,16 @@
- #define MP_FALLTHROUGH do {} while (0)
+-#if HAVE_DOS_PATHS
++#if defined(HAVE_PATHCCH) && HAVE_PATHCCH
+ #include <windows.h>
+ #include <pathcch.h>
  #endif
- 
-+#ifndef __has_attribute
-+#define __has_attribute(x) 0
-+#endif
-+
-+#if __has_attribute(nonstring)
-+#define MP_NONSTRING __attribute__((nonstring))
-+#else
-+#define MP_NONSTRING
-+#endif
-+
- // Broken crap with __USE_MINGW_ANSI_STDIO
- #if defined(__MINGW32__) && defined(__GNUC__) && !defined(__clang__)
- #undef PRINTF_ATTRIBUTE
-diff --git a/player/client.c b/player/client.c
-index 2a581a6bda..095a9f5367 100644
---- a/player/client.c
-+++ b/player/client.c
-@@ -1402,7 +1402,7 @@ static void getproperty_fn(void *arg)
-     struct getproperty_request *req = arg;
-     const struct m_option *type = get_mp_type_get(req->format);
- 
--    union m_option_value xdata = {0};
-+    union m_option_value xdata = m_option_value_default;
-     void *data = req->data ? req->data : &xdata;
- 
-     int err = -1;
-@@ -1560,6 +1560,8 @@ int mpv_observe_property(mpv_handle *ctx, uint64_t userdata,
-         .type = type,
-         .change_ts = 1, // force initial event
-         .refcount = 1,
-+        .value = m_option_value_default,
-+        .value_ret = m_option_value_default,
-     };
-     ctx->properties_change_ts += 1;
-     MP_TARRAY_APPEND(ctx, ctx->properties, ctx->num_properties, prop);
-@@ -1682,7 +1684,7 @@ static void send_client_property_changes(struct mpv_handle *ctx)
-         bool changed = false;
-         if (prop->format) {
-             const struct m_option *type = prop->type;
--            union m_option_value val = {0};
-+            union m_option_value val = m_option_value_default;
-             struct getproperty_request req = {
-                 .mpctx = ctx->mpctx,
-                 .name = prop->name,
-diff --git a/player/command.c b/player/command.c
-index 0eb13a7eed..f9add30bc2 100644
---- a/player/command.c
-+++ b/player/command.c
-@@ -3419,7 +3419,7 @@ static int mp_property_option_info(void *ctx, struct m_property *prop,
-             return M_PROPERTY_UNKNOWN;
-         const struct m_option *opt = co->opt;
- 
--        union m_option_value def = {0};
-+        union m_option_value def = m_option_value_default;
-         const void *def_ptr = m_config_get_co_default(mpctx->mconfig, co);
-         if (def_ptr && opt->type->size > 0)
-             memcpy(&def, def_ptr, opt->type->size);
-@@ -4725,7 +4725,7 @@ static void cmd_cycle_values(void *p)
-         return;
+@@ -172,7 +172,7 @@ char *mp_normalize_path(void *talloc_ctx, const char *path)
+         path = mp_path_join(tmp, cwd, path);
      }
  
--    union m_option_value curval = {0};
-+    union m_option_value curval = m_option_value_default;
-     r = mp_property_do(name, M_PROPERTY_GET, &curval, mpctx);
-     if (r <= 0) {
-         show_property_status(cmd, name, r);
-@@ -4734,7 +4734,7 @@ static void cmd_cycle_values(void *p)
+-#if HAVE_DOS_PATHS
++#if defined(HAVE_PATHCCH) && HAVE_PATHCCH
+     wchar_t *pathw = mp_from_utf8(tmp, path);
+     wchar_t *read = pathw, *write = pathw;
+     wchar_t prev = '\0';
+@@ -198,6 +198,8 @@ char *mp_normalize_path(void *talloc_ctx, const char *path)
+     char *ret = SUCCEEDED(hr) ? mp_to_utf8(talloc_ctx, pathc) : talloc_strdup(talloc_ctx, path);
+     talloc_free(tmp);
+     return ret;
++#elif HAVE_DOS_PATHS
++    return talloc_strdup(talloc_ctx, path);
+ #else
+     char *result = talloc_strdup(tmp, "");
+     const char *next;
+diff --git a/options/options.c b/options/options.c
+index 716c3e6f10..7202deb625 100644
+--- a/options/options.c
++++ b/options/options.c
+@@ -531,7 +531,9 @@ static const m_option_t mp_opts[] = {
+     {"msg-module", OPT_BOOL(msg_module), .flags = UPDATE_TERM},
+     {"msg-time", OPT_BOOL(msg_time), .flags = UPDATE_TERM},
+ #if HAVE_WIN32_DESKTOP
++#if HAVE_WIN32_EXECUTABLE
+     {"", OPT_SUBSTRUCT(w32_register_opts, w32_register_conf)},
++#endif
+     {"priority", OPT_CHOICE(w32_priority,
+         {"no",          0},
+         {"realtime",    REALTIME_PRIORITY_CLASS},
+diff --git a/player/main.c b/player/main.c
+index 37eb6b18f5..09ad005f3e 100644
+--- a/player/main.c
++++ b/player/main.c
+@@ -391,7 +391,7 @@ int mp_initialize(struct MPContext *mpctx, char **options)
+     if (handle_help_options(mpctx))
+         return 1; // help
  
-     int current = -1;
-     for (int n = first; n < cmd->num_args; n++) {
--        union m_option_value val = {0};
-+        union m_option_value val = m_option_value_default;
-         if (m_option_parse(mpctx->log, &prop, bstr0(name),
-                            bstr0(cmd->args[n].v.s), &val) < 0)
-             continue;
-@@ -5138,7 +5138,7 @@ static void cmd_change_list(void *p)
-         return;
-     }
- 
--    union m_option_value val = {0};
-+    union m_option_value val = m_option_value_default;
-     if (mp_property_do(name, M_PROPERTY_GET, &val, mpctx) <= 0) {
-         set_osd_msg(mpctx, osdl, osd_duration, "Could not read: '%s'", name);
-         cmd->success = false;
+-#if HAVE_WIN32_DESKTOP
++#if HAVE_WIN32_EXECUTABLE
+     if (mp_w32_handle_register(mpctx))
+         return 1; // register/unregister
+ #endif
 diff --git a/video/out/d3d11/libmpv_d3d11.c b/video/out/d3d11/libmpv_d3d11.c
 new file mode 100644
-index 0000000000..cf6f6bae44
+index 0000000000..b961407388
 --- /dev/null
 +++ b/video/out/d3d11/libmpv_d3d11.c
-@@ -0,0 +1,90 @@
+@@ -0,0 +1,93 @@
 +#include "common/msg.h"
 +#include "ra_d3d11.h"
-+#include "libmpv/render_dxgi.h"
++#include "mpv/render_dxgi.h"
 +#include "video/out/gpu/libmpv_gpu.h"
 +#include "osdep/windows_utils.h"
 +
 +struct priv {
-+    struct ra_tex *tex;
 +    ID3D11Device *device;
 +    IDXGISwapChain *swapchain;
++    struct ra_tex *wrapped_tex;
 +};
 +
 +static int init(struct libmpv_gpu_context *ctx, mpv_render_param *params)
@@ -417,7 +185,7 @@ index 0000000000..cf6f6bae44
 +
 +    mpv_dxgi_init_params *init_params =
 +        get_mpv_render_param(params, MPV_RENDER_PARAM_DXGI_INIT_PARAMS, NULL);
-+    if (!init_params)
++    if (!init_params || !init_params->device)
 +        return MPV_ERROR_INVALID_PARAMETER;
 +
 +    p->device = init_params->device;
@@ -446,18 +214,18 @@ index 0000000000..cf6f6bae44
 +    struct priv *p = ctx->priv;
 +    ID3D11Resource *backbuffer = NULL;
 +
-+    if (!p->tex) {
++    if (!p->wrapped_tex) {
 +        HRESULT hr = IDXGISwapChain_GetBuffer(p->swapchain, 0, &IID_ID3D11Texture2D,
 +                        (void**)&backbuffer);
 +        if (FAILED(hr)) {
 +            MP_ERR(ctx, "Couldn't get swapchain image\n");
 +            return MPV_ERROR_UNSUPPORTED;
 +        }
-+        p->tex = ra_d3d11_wrap_tex(ctx->ra_ctx->ra, backbuffer);
++        p->wrapped_tex = ra_d3d11_wrap_tex(ctx->ra_ctx->ra, backbuffer);
 +        SAFE_RELEASE(backbuffer);
 +    }
 +
-+    *out = p->tex;
++    *out = p->wrapped_tex;
 +    return 0;
 +}
 +
@@ -466,19 +234,22 @@ index 0000000000..cf6f6bae44
 +    struct priv *p = ctx->priv;
 +
 +    ra_d3d11_flush(ctx->ra_ctx->ra);
-+    ra_tex_free(ctx->ra_ctx->ra, &p->tex);
++    ra_tex_free(ctx->ra_ctx->ra, &p->wrapped_tex);
 +}
 +
 +static void destroy(struct libmpv_gpu_context *ctx)
 +{
 +    struct priv *p = ctx->priv;
-+    struct ra_ctx *ra_ctx = ctx->ra_ctx;
-+    if (ra_ctx->ra)
-+        ra_tex_free(ra_ctx->ra, &p->tex);
++
++    if (ctx->ra_ctx && ctx->ra_ctx->ra) {
++        ra_tex_free(ctx->ra_ctx->ra, &p->wrapped_tex);
++        // ra_d3d11 frees its own struct from inside its destroy callback.
++        ctx->ra_ctx->ra->fns->destroy(ctx->ra_ctx->ra);
++        ctx->ra_ctx->ra = NULL;
++    }
++    
 +    SAFE_RELEASE(p->swapchain);
 +    SAFE_RELEASE(p->device);
-+    if (ra_ctx->ra)
-+        ra_ctx->ra->fns->destroy(ra_ctx->ra);
 +}
 +
 +const struct libmpv_gpu_context_fns libmpv_gpu_context_d3d11 = {
@@ -490,10 +261,10 @@ index 0000000000..cf6f6bae44
 +};
 \ No newline at end of file
 diff --git a/video/out/d3d11/ra_d3d11.c b/video/out/d3d11/ra_d3d11.c
-index c002d8aad3..bf8ce61512 100644
+index 066278df43..b88c5f60bd 100644
 --- a/video/out/d3d11/ra_d3d11.c
 +++ b/video/out/d3d11/ra_d3d11.c
-@@ -2228,13 +2228,6 @@ static void destroy(struct ra *ra)
+@@ -2233,13 +2233,6 @@ static void destroy(struct ra *ra)
      SAFE_RELEASE(p->ctx1);
      SAFE_RELEASE(p->dev1);
      SAFE_RELEASE(p->dev);
@@ -508,7 +279,7 @@ index c002d8aad3..bf8ce61512 100644
  
      if (p->debug) {
 diff --git a/video/out/gpu/libmpv_gpu.c b/video/out/gpu/libmpv_gpu.c
-index aae1d18eed..bc65a73f7b 100644
+index 1b13c79632..abeef947b6 100644
 --- a/video/out/gpu/libmpv_gpu.c
 +++ b/video/out/gpu/libmpv_gpu.c
 @@ -6,6 +6,9 @@
@@ -530,3 +301,73 @@ index 497dcc3f69..fad1a00c0a 100644
  
  extern const struct libmpv_gpu_context_fns libmpv_gpu_context_gl;
 +extern const struct libmpv_gpu_context_fns libmpv_gpu_context_d3d11;
+diff --git a/video/out/w32_common.c b/video/out/w32_common.c
+index 0393fe9df5..12540df5af 100644
+--- a/video/out/w32_common.c
++++ b/video/out/w32_common.c
+@@ -78,6 +78,9 @@ EXTERN_C IMAGE_DOS_HEADER __ImageBase;
+ #define WM_SHOWMENU (WM_USER + 1)
+ 
+ struct w32_api {
++    HRESULT (WINAPI *pGetDpiForMonitor)(HMONITOR, MONITOR_DPI_TYPE, UINT*, UINT*);
++    BOOL (WINAPI *pAdjustWindowRectExForDpi)(LPRECT lpRect, DWORD dwStyle, BOOL bMenu, DWORD dwExStyle, UINT dpi);
++    int (WINAPI *pGetSystemMetricsForDpi)(int nIndex, UINT dpi);
+     BOOLEAN (WINAPI *pShouldAppsUseDarkMode)(void);
+     DWORD (WINAPI *pSetPreferredAppMode)(DWORD mode);
+ };
+@@ -195,7 +198,9 @@ struct vo_w32_state {
+ 
+ static inline int get_system_metrics(struct vo_w32_state *w32, int metric)
+ {
+-    return GetSystemMetricsForDpi(metric, w32->dpi);
++    return w32->api.pGetSystemMetricsForDpi
++               ? w32->api.pGetSystemMetricsForDpi(metric, w32->dpi)
++               : GetSystemMetrics(metric);
+ }
+ 
+ static void adjust_window_rect(struct vo_w32_state *w32, HWND hwnd, RECT *rc)
+@@ -203,8 +208,13 @@ static void adjust_window_rect(struct vo_w32_state *w32, HWND hwnd, RECT *rc)
+     if (!w32->opts->border && !IsMaximized(w32->window))
+         return;
+ 
+-    AdjustWindowRectExForDpi(rc, GetWindowLongPtrW(hwnd, GWL_STYLE), 0,
+-                             GetWindowLongPtrW(hwnd, GWL_EXSTYLE), w32->dpi);
++    if (w32->api.pAdjustWindowRectExForDpi) {
++        w32->api.pAdjustWindowRectExForDpi(rc,
++            GetWindowLongPtrW(hwnd, GWL_STYLE), 0,
++            GetWindowLongPtrW(hwnd, GWL_EXSTYLE), w32->dpi);
++    } else {
++        AdjustWindowRect(rc, GetWindowLongPtrW(hwnd, GWL_STYLE), 0);
++    }
+ }
+ 
+ static bool check_windows10_build(DWORD build)
+@@ -670,7 +680,8 @@ static void update_dpi(struct vo_w32_state *w32)
+     HDC hdc = NULL;
+     int dpi = 0;
+ 
+-    if (GetDpiForMonitor(w32->monitor, MDT_EFFECTIVE_DPI, &dpiX, &dpiY) == S_OK) {
++    if (w32->api.pGetDpiForMonitor && w32->api.pGetDpiForMonitor(w32->monitor,
++                                     MDT_EFFECTIVE_DPI, &dpiX, &dpiY) == S_OK) {
+         dpi = (int)dpiX;
+         MP_VERBOSE(w32, "DPI detected from the new API: %d\n", dpi);
+     } else if ((hdc = GetDC(NULL))) {
+@@ -2013,6 +2024,18 @@ void vo_w32_config(struct vo *vo)
+ 
+ static void w32_api_load(struct vo_w32_state *w32)
+ {
++    HMODULE shcore_dll = LoadLibraryW(L"shcore.dll");
++    // Available since Win8.1
++    w32->api.pGetDpiForMonitor = !shcore_dll ? NULL :
++                (void *)GetProcAddress(shcore_dll, "GetDpiForMonitor");
++
++    HMODULE user32_dll = LoadLibraryW(L"user32.dll");
++    // Available since Win10
++    w32->api.pAdjustWindowRectExForDpi = !user32_dll ? NULL :
++                (void *)GetProcAddress(user32_dll, "AdjustWindowRectExForDpi");
++    w32->api.pGetSystemMetricsForDpi = !user32_dll ? NULL :
++                (void *)GetProcAddress(user32_dll, "GetSystemMetricsForDpi");
++
+     // Dark mode related functions, available since the 1809 Windows 10 update
+     // Check the Windows build version as on previous versions used ordinals
+     // may point to unexpected code/data. Alternatively could check uxtheme.dll

@@ -6,7 +6,7 @@
 _realname=ffmpeg
 pkgbase="mingw-w64-${_realname}"
 pkgname="${MINGW_PACKAGE_PREFIX}-${_realname}"
-pkgver=6.1.6
+pkgver=8.1.2
 pkgrel=2
 pkgdesc="Complete solution to record, convert and stream audio and video (mingw-w64)"
 arch=('any')
@@ -30,7 +30,7 @@ source=(
   "https://ffmpeg.org/releases/${_realname}-${pkgver}.tar.xz"
   "https://github.com/FFmpeg/FFmpeg/commit/93f653f95c.patch"
 )
-sha256sums=('d4fcb164028dd3beee5d92c0ac72e46aac6973c75ea12dc14de07bf8f407370a' 'SKIP')
+sha256sums=('464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c' 'SKIP')
 
 prepare() {
   cd ${_realname}-${pkgver}

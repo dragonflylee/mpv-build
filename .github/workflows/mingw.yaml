@@ -43,7 +43,7 @@ jobs:
     - uses: actions/checkout@v6
     - name: Build packages
       run: |
-        for pkg in mbedtls curl libwebp freetype harfbuzz fribidi libass dav1d ffnvcodec-headers ffmpeg mpv; do
+        for pkg in mbedtls curl libwebp freetype harfbuzz fribidi libass dav1d ffnvcodec-headers ffmpeg spirv-headers spirv-tools glslang spirv-cross shaderc libplacebo mpv; do
           echo building $p
           pushd $pkg; makepkg-mingw -sciCf --noconfirm; popd
         done
