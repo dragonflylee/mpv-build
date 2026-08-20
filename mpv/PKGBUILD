@@ -4,7 +4,7 @@
 _realname=mpv
 pkgbase="mingw-w64-${_realname}"
 pkgname="${MINGW_PACKAGE_PREFIX}-${_realname}"
-pkgver=0.36.0
+pkgver=0.41.0
 pkgrel=3
 pkgdesc="Video player based on MPlayer/mplayer2 (mingw-w64)"
 url="https://mpv.io/"
@@ -18,13 +18,16 @@ makedepends=(
   "${MINGW_PACKAGE_PREFIX}-pkgconf"
   "${MINGW_PACKAGE_PREFIX}-ffmpeg"
   "${MINGW_PACKAGE_PREFIX}-libass"
+  "${MINGW_PACKAGE_PREFIX}-shaderc"
+  "${MINGW_PACKAGE_PREFIX}-spirv-cross"
+  "${MINGW_PACKAGE_PREFIX}-libplacebo"
 )
 options=('strip')
 source=(
   "${_realname}-${pkgver}.tar.gz"::"https://github.com/mpv-player/${_realname}/archive/v${pkgver}.tar.gz"
   "0001-d3d11-render.patch"
 )
-sha256sums=('29abc44f8ebee013bb2f9fe14d80b30db19b534c679056e4851ceadf5a5e8bf6' 'SKIP')
+sha256sums=('ee21092a5ee427353392360929dc64645c54479aefdb5babc5cfbb5fad626209' 'SKIP')
 
 prepare() {
   cd "${srcdir}/${_realname}-${pkgver}"
@@ -48,9 +51,8 @@ build() {
       -Dcplayer=false \
       -Dtests=false \
       -Dgl-win32=disabled \
-      -Dgl-win32=disabled \
       -Degl-angle-lib=disabled \
-      -Dd3d11=disabled \
+      -Dd3d11=enabled \
       -Dvulkan=disabled \
       -Dlibarchive=disabled \
       "build-${MSYSTEM}" \
