@@ -52,10 +52,10 @@ libass: harfbuzz fribidi
 	meson install -C build-libass
 
 ffmpeg: dav1d nv-codec-headers
-	wget -qO- https://ffmpeg.org/releases/ffmpeg-8.1.3.tar.xz | tar Jxf - -C $(TMPDIR)
-	patch -d $(TMPDIR)/ffmpeg-8.1.3 -Nbp1 -i $(CURDIR)/patches/ffmpeg-v4l2request.patch
+	wget -qO- https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz | tar Jxf - -C $(TMPDIR)
+	patch -d $(TMPDIR)/ffmpeg-9.0.2 -Nbp1 -i $(CURDIR)/patches/ffmpeg-v4l2request.patch
 	mkdir -p build-ffmpeg && cd build-ffmpeg && \
-	$(TMPDIR)/ffmpeg-8.1.3/configure --prefix=$(PREFIX) --disable-shared --enable-static \
+	$(TMPDIR)/ffmpeg-9.0.2/configure --prefix=$(PREFIX) --disable-shared --enable-static \
 		--enable-pthreads --enable-runtime-cpudetect --pkg-config-flags=--static $(FFMPEG_FLAGS) \
 		--disable-programs --disable-debug --disable-doc --disable-autodetect --enable-pic  \
 		--disable-muxers --enable-libdrm --enable-vaapi --enable-vdpau --disable-encoders --enable-encoder=png \
