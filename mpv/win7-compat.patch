@@ -1,0 +1,182 @@
+diff --git a/meson.build b/meson.build
+index b15f310306..154a9e65e7 100644
+--- a/meson.build
++++ b/meson.build
+@@ -334,7 +334,7 @@ features += {'darwin': darwin}
+ features += {'posix': posix}
+ features += {'dos-paths': win32, 'win32': win32}
+ 
+-mswin_flags = ['-D_WIN32_WINNT=0x0A00', '-DWINVER=0x0A00', '-DUNICODE',
++mswin_flags = ['-D_WIN32_WINNT=0x0602', '-DWINVER=0x0602', '-DUNICODE',
+                '-DCOBJMACROS', '-DINITGUID', '-DNOMINMAX',
+                '-D_USE_MATH_DEFINES', '-DWIN32_LEAN_AND_MEAN',
+                '-D_CRT_DECLARE_NONSTDC_NAMES', '-D_CRT_NONSTDC_NO_WARNINGS',
+@@ -529,7 +529,6 @@ if features['win32-desktop']
+                           cc.find_library('imm32'),
+                           cc.find_library('ntdll'),
+                           cc.find_library('ole32'),
+-                          cc.find_library('pathcch'),
+                           cc.find_library('shcore'),
+                           cc.find_library('user32'),
+                           cc.find_library('uuid'),
+@@ -542,11 +541,13 @@ if features['win32-desktop']
+     else
+         sources += files('osdep/subprocess-dummy.c')
+     endif
++    if features['win32-executable']
++        sources += files('osdep/w32_register.c')
++    endif
+     sources += files('input/ipc-win.c',
+                      'player/clipboard/clipboard-win.c',
+                      'osdep/language-win.c',
+                      'osdep/terminal-win.c',
+-                     'osdep/w32_register.c',
+                      'video/out/w32_common.c',
+                      'video/out/win32/displayconfig.c',
+                      'video/out/win32/droptarget.c',
+diff --git a/misc/path_utils.c b/misc/path_utils.c
+index be47fbd3c2..117042f469 100644
+--- a/misc/path_utils.c
++++ b/misc/path_utils.c
+@@ -37,6 +37,10 @@
+ #if HAVE_DOS_PATHS
+ #include <windows.h>
+ #include <pathcch.h>
++
++// PathCchCanonicalizeEx is available since Windows 8. Load it dynamically so
++// older systems (e.g. Windows 7) fall back to the non-canonicalized path.
++static HRESULT (WINAPI *pPathAllocCanonicalize)(PCWSTR, unsigned long, PWSTR *);
+ #endif
+ 
+ bstr mp_basename_bstr(bstr path)
+@@ -196,6 +200,17 @@ char *mp_normalize_path(void *talloc_ctx, const char *path)
+     char *result;
+ 
+ #if HAVE_DOS_PATHS
++    static bool pathcch_loaded;
++    if (!pathcch_loaded) {
++        HMODULE pathcch_dll = LoadLibraryW(L"api-ms-win-core-path-l1-1-0.dll");
++        pPathAllocCanonicalize = !pathcch_dll ? NULL :
++                    (void *)GetProcAddress(pathcch_dll, "PathAllocCanonicalize");
++        pathcch_loaded = true;
++    }
++    if (!pPathAllocCanonicalize) {
++        talloc_free(tmp);
++        return talloc_strdup(talloc_ctx, path);
++    }
+     wchar_t *pathw = mp_from_utf8(tmp, path);
+     DWORD len = GetFullPathNameW(pathw, 0, NULL, NULL);
+     wchar_t *pathc = talloc_array(tmp, wchar_t, len);
+@@ -207,7 +222,7 @@ char *mp_normalize_path(void *talloc_ctx, const char *path)
+     // removes it, so skip it for device paths.
+     wchar_t *pathx = NULL;
+     if (wcsncmp(pathc, L"\\\\.\\", 4) &&
+-        SUCCEEDED(PathAllocCanonicalize(pathc, PATHCCH_ALLOW_LONG_PATHS, &pathx)))
++        SUCCEEDED(pPathAllocCanonicalize(pathc, PATHCCH_ALLOW_LONG_PATHS, &pathx)))
+         pathc = pathx;
+     result = mp_to_utf8(talloc_ctx, pathc);
+     LocalFree(pathx);
+diff --git a/options/options.c b/options/options.c
+index a432414551..c9a86898c9 100644
+--- a/options/options.c
++++ b/options/options.c
+@@ -539,7 +539,9 @@ static const m_option_t mp_opts[] = {
+     {"msg-module", OPT_BOOL(msg_module), .flags = UPDATE_TERM},
+     {"msg-time", OPT_BOOL(msg_time), .flags = UPDATE_TERM},
+ #if HAVE_WIN32_DESKTOP
++#if HAVE_WIN32_EXECUTABLE
+     {"", OPT_SUBSTRUCT(w32_register_opts, w32_register_conf)},
++#endif
+     {"priority", OPT_CHOICE(w32_priority,
+         {"no",          0},
+         {"realtime",    REALTIME_PRIORITY_CLASS},
+diff --git a/player/main.c b/player/main.c
+index 2fbb19d602..e274bfbca4 100644
+--- a/player/main.c
++++ b/player/main.c
+@@ -80,7 +80,7 @@ static const char def_config[] =
+ #include "osdep/win32/smtc.h"
+ #endif
+ 
+-#if HAVE_WIN32_DESKTOP
++#if HAVE_WIN32_EXECUTABLE
+ #include "osdep/w32_register.h"
+ #endif
+ 
+@@ -399,7 +399,7 @@ int mp_initialize(struct MPContext *mpctx, char **options)
+     if (handle_help_options(mpctx))
+         return 1; // help
+ 
+-#if HAVE_WIN32_DESKTOP
++#if HAVE_WIN32_EXECUTABLE
+     if (mp_w32_handle_register(mpctx))
+         return 1; // register/unregister
+ #endif
+diff --git a/video/out/w32_common.c b/video/out/w32_common.c
+index f4fd549839..2d8bd1c223 100644
+--- a/video/out/w32_common.c
++++ b/video/out/w32_common.c
+@@ -79,6 +79,9 @@ EXTERN_C IMAGE_DOS_HEADER __ImageBase;
+ #define WM_SHOWMENU (WM_USER + 1)
+ 
+ struct w32_api {
++    HRESULT (WINAPI *pGetDpiForMonitor)(HMONITOR, MONITOR_DPI_TYPE, UINT*, UINT*);
++    BOOL (WINAPI *pAdjustWindowRectExForDpi)(LPRECT lpRect, DWORD dwStyle, BOOL bMenu, DWORD dwExStyle, UINT dpi);
++    int (WINAPI *pGetSystemMetricsForDpi)(int nIndex, UINT dpi);
+     BOOLEAN (WINAPI *pShouldAppsUseDarkMode)(void);
+     DWORD (WINAPI *pSetPreferredAppMode)(DWORD mode);
+ };
+@@ -194,7 +197,9 @@ struct vo_w32_state {
+ 
+ static inline int get_system_metrics(struct vo_w32_state *w32, int metric)
+ {
+-    return GetSystemMetricsForDpi(metric, w32->dpi);
++    return w32->api.pGetSystemMetricsForDpi
++               ? w32->api.pGetSystemMetricsForDpi(metric, w32->dpi)
++               : GetSystemMetrics(metric);
+ }
+ 
+ static void adjust_window_rect(struct vo_w32_state *w32, HWND hwnd, RECT *rc)
+@@ -202,8 +207,13 @@ static void adjust_window_rect(struct vo_w32_state *w32, HWND hwnd, RECT *rc)
+     if (!w32->opts->border && !IsMaximized(w32->window))
+         return;
+ 
+-    AdjustWindowRectExForDpi(rc, GetWindowLongPtrW(hwnd, GWL_STYLE), 0,
+-                             GetWindowLongPtrW(hwnd, GWL_EXSTYLE), w32->dpi);
++    if (w32->api.pAdjustWindowRectExForDpi) {
++        w32->api.pAdjustWindowRectExForDpi(rc, GetWindowLongPtrW(hwnd, GWL_STYLE),
++                                           0, GetWindowLongPtrW(hwnd, GWL_EXSTYLE), w32->dpi);
++    } else {
++        AdjustWindowRectEx(rc, GetWindowLongPtrW(hwnd, GWL_STYLE),
++                           0, GetWindowLongPtrW(hwnd, GWL_EXSTYLE));
++    }
+ }
+ 
+ static bool check_windows10_build(DWORD build)
+@@ -649,7 +659,8 @@ static void update_dpi(struct vo_w32_state *w32)
+     HDC hdc = NULL;
+     int dpi = 0;
+ 
+-    if (GetDpiForMonitor(w32->monitor, MDT_EFFECTIVE_DPI, &dpiX, &dpiY) == S_OK) {
++    if (w32->api.pGetDpiForMonitor &&
++        w32->api.pGetDpiForMonitor(w32->monitor, MDT_EFFECTIVE_DPI, &dpiX, &dpiY) == S_OK) {
+         dpi = (int)dpiX;
+         MP_VERBOSE(w32, "DPI detected from the new API: %d\n", dpi);
+     } else if ((hdc = GetDC(NULL))) {
+@@ -2030,6 +2041,16 @@ void vo_w32_config(struct vo *vo)
+ 
+ static void w32_api_load(struct vo_w32_state *w32)
+ {
++    // These are only available on newer Windows versions, so load them at runtime
++    HMODULE shcore_dll = LoadLibraryW(L"shcore.dll");
++    HMODULE user32_dll = LoadLibraryW(L"user32.dll");
++    w32->api.pGetDpiForMonitor = !shcore_dll ? NULL :
++                (void *)GetProcAddress(shcore_dll, "GetDpiForMonitor");
++    w32->api.pAdjustWindowRectExForDpi = !user32_dll ? NULL :
++                (void *)GetProcAddress(user32_dll, "AdjustWindowRectExForDpi");
++    w32->api.pGetSystemMetricsForDpi = !user32_dll ? NULL :
++                (void *)GetProcAddress(user32_dll, "GetSystemMetricsForDpi");
++
+     // Dark mode related functions, available since the 1809 Windows 10 update
+     // Check the Windows build version as on previous versions used ordinals
+     // may point to unexpected code/data. Alternatively could check uxtheme.dll
