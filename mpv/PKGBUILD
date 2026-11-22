@@ -4,7 +4,7 @@
 _realname=mpv
 pkgbase="mingw-w64-${_realname}"
 pkgname="${MINGW_PACKAGE_PREFIX}-${_realname}"
-pkgver=0.42.0
+pkgver=master
 pkgrel=2
 pkgdesc="Video player based on MPlayer/mplayer2 (mingw-w64)"
 url="https://mpv.io/"
@@ -24,17 +24,24 @@ makedepends=(
 )
 options=('strip')
 source=(
-  "${_realname}-${pkgver}.tar.gz"::"https://github.com/mpv-player/${_realname}/archive/v${pkgver}.tar.gz"
+  "git+https://github.com/mpv-player/${_realname}.git"
   "win7-compat.patch"
 )
-sha256sums=('bcfebbfa2b65a6d88dc97ea18117831072373e38b5785a2afb874ed4df5070dd' 'SKIP')
+sha256sums=('SKIP' 'SKIP')
+
+pkgver() {
+  cd "${srcdir}/${_realname}"
+  git rev-parse --short=7 HEAD
+}
 
 prepare() {
-  cd "${srcdir}/${_realname}-${pkgver}"
+  cd "${srcdir}/${_realname}"
   patch -Nbp1 -i "${srcdir}/win7-compat.patch"
 }
 
 build() {
+  sed -i "s/UNKNOWN/$pkgver/" "${srcdir}/${_realname}/MPV_VERSION"
+
   if [[ ${MSYSTEM} == CLANG* ]]; then
     LDFLAGS="-lc++ -static"
   else
@@ -56,7 +63,7 @@ build() {
       -Dvulkan=disabled \
       -Dlibarchive=disabled \
       "build-${MSYSTEM}" \
-      "${srcdir}/${_realname}-${pkgver}"
+      "${srcdir}/${_realname}"
   meson compile -C "build-${MSYSTEM}"
 }
 

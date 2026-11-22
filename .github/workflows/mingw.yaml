@@ -3,6 +3,7 @@ name: mingw
 on:
   push:
     branches: [ mingw ]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -21,6 +22,9 @@ jobs:
     defaults:
       run:
         shell: msys2 {0}
+    env:
+      GITFLAGS: --mirror --no-single-branch --depth=1
+      PKGDEST: ${{ github.workspace }}/_pkgs
     steps:
     - name: Disable autocrlf
       shell: bash
@@ -42,27 +46,41 @@ jobs:
           mingw-w64-${{matrix.env}}-cmake
           mingw-w64-${{matrix.env}}-cc
     - uses: actions/checkout@v7
-    - name: Build packages
-      env:
-        GITFLAGS: --mirror --no-single-branch --depth=1
+    - name: Cache dependency packages
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ env.PKGDEST }}
+        key: pkgs-${{ matrix.sys }}-${{ hashFiles('*/PKGBUILD', '*/*.patch') }}
+    - name: Build dependency packages
+      if: steps.cache.outputs.cache-hit != 'true'
       run: |
-        for pkg in curl libwebp freetype harfbuzz fribidi libass dav1d ffnvcodec-headers ffmpeg spirv-headers spirv-tools glslang spirv-cross shaderc libplacebo mpv; do
-          echo building $pkg
-          pushd $pkg; makepkg-mingw -sciCf --noconfirm; popd
+        for pkg in curl libwebp freetype harfbuzz fribidi libass dav1d ffnvcodec-headers ffmpeg spirv-headers spirv-tools glslang spirv-cross shaderc libplacebo; do
+          pushd $pkg
+          makepkg-mingw -sciCf --noconfirm
+          popd
         done
+    - name: Build mpv
+      run: |
+        pushd mpv
+        makepkg-mingw -sciCf --noconfirm
+        popd
+    - name: Archive dependency packages
+      if: steps.cache.outputs.cache-hit != 'true'
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ matrix.sys }}-deps-${{ github.run_number }}
+        path: ${{ env.PKGDEST }}/*.pkg.tar.zst
     - name: Archive Build Logs
       uses: actions/upload-artifact@v7
       with:
         name: ${{ matrix.sys }}-${{ github.run_number }}
-        path: "*/*.pkg.tar.zst"
+        path: ${{ env.PKGDEST }}/mingw-w64-*-mpv-*.pkg.tar.zst
     - name: Release packages
       uses: softprops/action-gh-release@v3
       with:
         tag_name: mingw-package
         prerelease: true
-        files: |
-          curl/*.pkg.tar.zst
-          libwebp/*.pkg.tar.zst
-          mpv/*.pkg.tar.zst
+        files: ${{ env.PKGDEST }}/mingw-w64-*-mpv-*.pkg.tar.zst
         body: |
           ![download](https://img.shields.io/github/downloads/${{ github.repository }}/mingw-package/total?label=Downloads)

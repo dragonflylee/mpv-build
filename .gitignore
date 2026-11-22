@@ -2,5 +2,6 @@
 /*/pkg
 /*/*.tar.*
 /*/*.pkg.tar.zst
+/*/.SRCINFO
 mpv/mpv
 libplacebo/libplacebo
