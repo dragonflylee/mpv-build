@@ -20,7 +20,6 @@ clean:
 
 download:
 	curl --retry 5 -sSL https://www.freedesktop.org/software/uchardet/releases/uchardet-0.0.8.tar.xz | tar Jxf - -C $(TMPDIR)
-	curl --retry 5 -sSL https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.8/mbedtls-3.6.8.tar.bz2 | tar jxf - -C $(TMPDIR)
 	curl --retry 5 -sSL https://curl.se/download/curl-8.13.0.tar.xz | tar Jxf - -C $(TMPDIR)
 	curl --retry 5 -sSL https://github.com/webmproject/libwebp/archive/v1.6.0.tar.gz | tar zxf - -C $(TMPDIR)
 	curl --retry 5 -sSL https://downloads.sourceforge.net/project/freetype/freetype2/2.15.0/freetype-2.15.0.tar.xz | tar Jxf - -C $(TMPDIR)
@@ -53,15 +52,6 @@ uchardet:
 		-DBUILD_SHARED_LIBS=OFF -DBUILD_BINARY=OFF
 	cmake --build build/uchardet
 	cmake --install build/uchardet
-
-mbedtls:
-	cmake -B build/mbedtls -S $(TMPDIR)/mbedtls-3.6.8 -G Ninja -DCMAKE_BUILD_TYPE=Release \
-		-DCMAKE_OSX_ARCHITECTURES=$(OSX_ARCH) -DCMAKE_OSX_DEPLOYMENT_TARGET=$(OSX_TARGET) \
-		-DCMAKE_INSTALL_PREFIX=$(PREFIX) -DCMAKE_INSTALL_NAME_DIR=$(PREFIX)/lib \
-		-DUSE_SHARED_MBEDTLS_LIBRARY=OFF -DUSE_STATIC_MBEDTLS_LIBRARY=ON \
-		-DENABLE_PROGRAMS=OFF -DENABLE_TESTING=OFF
-	cmake --build build/mbedtls
-	cmake --install build/mbedtls
 
 libwebp:
 	cmake -B build/libwebp -S $(TMPDIR)/libwebp-1.6.0 -G Ninja -DCMAKE_BUILD_TYPE=Release \
@@ -110,7 +100,7 @@ dav1d:
 	meson compile -C build/dav1d
 	meson install -C build/dav1d
 
-ffmpeg: curl mbedtls libass dav1d
+ffmpeg: curl libass dav1d
 	mkdir -p build/ffmpeg && cd build/ffmpeg && \
 	$(TMPDIR)/ffmpeg-9.1/configure --enable-shared --disable-static --prefix=$(PREFIX) \
 		--enable-pthreads --enable-runtime-cpudetect --pkg-config-flags=--static \
@@ -126,7 +116,7 @@ ffmpeg: curl mbedtls libass dav1d
 		--disable-filters --enable-filter=hflip,vflip,transpose \
 		--disable-libjack --disable-indev=jack --enable-network --enable-libcurl \
 		--enable-libdav1d --enable-libass --enable-libfreetype --enable-zlib --enable-bzlib \
-		--enable-videotoolbox --enable-audiotoolbox --enable-mbedtls --enable-version3
+		--enable-videotoolbox --enable-audiotoolbox --enable-securetransport
 	$(MAKE) -C build/ffmpeg -j$(shell sysctl -n hw.ncpu)
 	$(MAKE) -C build/ffmpeg install
 
