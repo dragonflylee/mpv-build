@@ -4,7 +4,7 @@
 
 ## 特性
 
-- **硬件加速**：FFmpeg 集成 `nvtegra`（Tegra X1 NVDEC）。
+- **硬件加速**：FFmpeg 集成 [`envideo`](https://github.com/averne/envideo)（Tegra X1 NVDEC/NVJPG），提供 `h264_envideo`、`hevc_envideo` 等硬件解码器及 `deinterlace_envideo` / `denoise_envideo` / `sharpness_envideo` 滤镜。
 - **deko3d 渲染**：mpv 提供基于 `libuam` 的 deko3d 视频输出。
 - **Horizon 音频**：`ao_hos` 驱动，使用 `audren`。
 - **网络串流**：curl + mbedtls + FFmpeg `https/tls/http` 协议。
@@ -14,6 +14,7 @@
 | 目录 | 包名 | 说明 |
 | --- | --- | --- |
 | `dav1d/` | `switch-dav1d` | AV1 解码器 |
+| `envideo/` | `envideo` | Nvidia 多媒体引擎底层封装（NVDEC 硬解） |
 | `mbedtls/` | `switch-mbedtls` | TLS/SSL 库 |
 | `curl/` | `switch-curl` | HTTP(S) 客户端 |
 | `ffmpeg/` | `switch-ffmpeg` | 集成 nvtegra 的 FFmpeg |
@@ -30,7 +31,7 @@ docker run --rm -it -v "$PWD":/work mpv-portlibs bash
 
 # 容器内按依赖顺序构建
 cd /work
-for pkg in dav1d mbedtls curl libuam ffmpeg mpv; do
+for pkg in dav1d mbedtls curl libuam envideo ffmpeg mpv; do
     ( cd "$pkg" && makepkg -si --noconfirm )
 done
 ```

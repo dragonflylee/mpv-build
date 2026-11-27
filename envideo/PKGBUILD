@@ -1,0 +1,28 @@
+# Maintainer: averne <averne381@gmail.com>
+# Contributor: mpv-build
+
+pkgname=envideo
+pkgver=master
+pkgrel=1
+pkgdesc='Low-level interaction with Nvidia multimedia engines (for Nintendo Switch homebrew development)'
+arch=('any')
+url='https://github.com/averne/envideo'
+license=('GPL2')
+options=(!strip libtool staticlibs)
+makedepends=('dkp-toolchain-vars' 'dkp-meson-scripts')
+groups=('switch-portlibs')
+source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/${pkgver}.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+  # Placeholder: tarball lacks the nvidia submodule include dir required by meson.build
+  mkdir -p Envideo-${pkgver}/src/nvidia/open-gpu-kernel-modules/src/common/sdk/nvidia/inc
+
+  /opt/devkitpro/meson-cross.sh switch crossfile.txt build \
+    Envideo-${pkgver} -Dnvgpu=enabled -Dtegra-drm=false
+  meson compile -C build
+}
+
+package() {
+  DESTDIR="$pkgdir" meson install -C build
+}

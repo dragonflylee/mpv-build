@@ -26,11 +26,11 @@ jobs:
         echo 'builder ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/builder
 
         chown -R builder:builder ${GITHUB_WORKSPACE}
-        for pkg in dav1d ffmpeg libuam; do
+        for pkg in dav1d libuam envideo ffmpeg; do
           echo building $pkg
           su - builder -c "cd $pkg && dkp-makepkg -sciCf --noconfirm"
         done
-        for pkg in curl mpv ntfs-3g nspmini hacbrewpack; do
+        for pkg in curl mpv; do
           echo building $pkg
           su - builder -c "cd $pkg && dkp-makepkg -scCf --noconfirm"
         done

@@ -626,123 +626,6 @@ index 5f2d31df3d..f3d46c371d 100644
  
  # macOS features
  option('macos-10-11-features', type: 'feature', value: 'auto', description: 'macOS 10.11 SDK Features')
-diff --git a/misc/language.c b/misc/language.c
-index 92857f75b4..f9eb696f49 100644
---- a/misc/language.c
-+++ b/misc/language.c
-@@ -29,8 +29,8 @@
- #include <strings.h>
- 
- static const struct lang {
--    char match[4];
--    char canonical[4];
-+    char match[4] MP_NONSTRING;
-+    char canonical[4] MP_NONSTRING;
- } langmap[] = {
-     {"aa", "aar"},
-     {"ab", "abk"},
-diff --git a/options/m_config_core.c b/options/m_config_core.c
-index 4f8c462db1..0e6f71c68b 100644
---- a/options/m_config_core.c
-+++ b/options/m_config_core.c
-@@ -105,8 +105,6 @@ struct m_group_data {
-     uint64_t ts;        // timestamp of the data copy
- };
- 
--static const union m_option_value default_value = {0};
--
- static void add_sub_group(struct m_config_shadow *shadow, const char *name_prefix,
-                           int parent_group_index, int parent_ptr,
-                           const struct m_sub_options *subopts);
-@@ -241,7 +239,7 @@ const void *m_config_shadow_get_opt_default(struct m_config_shadow *shadow,
-     if (subopt->defaults)
-         return (char *)subopt->defaults + opt->offset;
- 
--    return &default_value;
-+    return &m_option_value_default;
- }
- 
- void *m_config_cache_get_opt_data(struct m_config_cache *cache, int32_t id)
-diff --git a/options/m_config_frontend.c b/options/m_config_frontend.c
-index 5a6db46d83..e2f492bdd6 100644
---- a/options/m_config_frontend.c
-+++ b/options/m_config_frontend.c
-@@ -758,7 +758,7 @@ int m_config_set_option_cli(struct m_config *config, struct bstr name,
-                    BSTR_P(name), BSTR_P(param), flags);
-     }
- 
--    union m_option_value val = {0};
-+    union m_option_value val = m_option_value_default;
- 
-     // Some option types are "impure" and work on the existing data.
-     // (Prime examples: --vf-add, --sub-file)
-@@ -792,7 +792,7 @@ int m_config_set_option_node(struct m_config *config, bstr name,
- 
-     // Do this on an "empty" type to make setting the option strictly overwrite
-     // the old value, as opposed to e.g. appending to lists.
--    union m_option_value val = {0};
-+    union m_option_value val = m_option_value_default;
- 
-     if (data->format == MPV_FORMAT_STRING) {
-         bstr param = bstr0(data->u.string);
-@@ -877,9 +877,8 @@ void m_config_print_option_list(const struct m_config *config, const char *name)
-         }
-         char *def = NULL;
-         const void *defptr = m_config_get_co_default(config, co);
--        const union m_option_value default_value = {0};
-         if (!defptr)
--            defptr = &default_value;
-+            defptr = &m_option_value_default;
-         if (defptr)
-             def = m_option_pretty_print(opt, defptr);
-         if (def) {
-diff --git a/options/m_option.h b/options/m_option.h
-index bcdc1f9fcc..ce9ddab4bb 100644
---- a/options/m_option.h
-+++ b/options/m_option.h
-@@ -253,6 +253,11 @@ union m_option_value {
-     struct m_channels channels;
- };
- 
-+// Keep fully zeroed instance of m_option_value to use as a default value, before
-+// any specific union member is used. C standard says that `= {0}` activates and
-+// initializes only the first member of the union, leaving padding bits undefined.
-+static const union m_option_value m_option_value_default;
-+
- ////////////////////////////////////////////////////////////////////////////
- 
- struct m_option_action {
-diff --git a/options/m_property.c b/options/m_property.c
-index fa91fd1162..ff088efb6c 100644
---- a/options/m_property.c
-+++ b/options/m_property.c
-@@ -38,7 +38,7 @@ static int m_property_multiply(struct mp_log *log,
-                                const struct m_property *prop_list,
-                                const char *property, double f, void *ctx)
- {
--    union m_option_value val = {0};
-+    union m_option_value val = m_option_value_default;
-     struct m_option opt = {0};
-     int r;
- 
-@@ -98,7 +98,7 @@ static int do_action(const struct m_property *prop_list, const char *name,
- int m_property_do(struct mp_log *log, const struct m_property *prop_list,
-                   const char *name, int action, void *arg, void *ctx)
- {
--    union m_option_value val = {0};
-+    union m_option_value val = m_option_value_default;
-     int r;
- 
-     struct m_option opt = {0};
-@@ -545,7 +545,7 @@ int m_property_read_list(int action, void *arg, int count,
-                 r = get_item(n, M_PROPERTY_GET_TYPE, &opt, ctx);
-                 if (r != M_PROPERTY_OK)
-                     goto err;
--                union m_option_value val = {0};
-+                union m_option_value val = m_option_value_default;
-                 r = get_item(n, M_PROPERTY_GET, &val, ctx);
-                 if (r != M_PROPERTY_OK)
-                     goto err;
 diff --git a/options/path.c b/options/path.c
 index 95a79a94b1..dd75006adb 100644
 --- a/options/path.c
@@ -767,27 +650,6 @@ index 95a79a94b1..dd75006adb 100644
      if (path.len && strchr(mp_path_separators, path.start[0]))
          return true;
  
-diff --git a/osdep/compiler.h b/osdep/compiler.h
-index 37431e60eb..6b76a4b719 100644
---- a/osdep/compiler.h
-+++ b/osdep/compiler.h
-@@ -13,6 +13,16 @@
- #define MP_FALLTHROUGH do {} while (0)
- #endif
- 
-+#ifndef __has_attribute
-+#define __has_attribute(x) 0
-+#endif
-+
-+#if __has_attribute(nonstring)
-+#define MP_NONSTRING __attribute__((nonstring))
-+#else
-+#define MP_NONSTRING
-+#endif
-+
- // Broken crap with __USE_MINGW_ANSI_STDIO
- #if defined(__MINGW32__) && defined(__GNUC__) && !defined(__clang__)
- #undef PRINTF_ATTRIBUTE
 diff --git a/osdep/io.c b/osdep/io.c
 index 8cd6dede85..1304c8f12f 100644
 --- a/osdep/io.c
@@ -871,100 +733,6 @@ index 0000000000..398ff01729
 +#define munmap(a, b) free(a)
 +
 +#endif
-diff --git a/player/client.c b/player/client.c
-index 2a581a6bda..095a9f5367 100644
---- a/player/client.c
-+++ b/player/client.c
-@@ -1402,7 +1402,7 @@ static void getproperty_fn(void *arg)
-     struct getproperty_request *req = arg;
-     const struct m_option *type = get_mp_type_get(req->format);
- 
--    union m_option_value xdata = {0};
-+    union m_option_value xdata = m_option_value_default;
-     void *data = req->data ? req->data : &xdata;
- 
-     int err = -1;
-@@ -1560,6 +1560,8 @@ int mpv_observe_property(mpv_handle *ctx, uint64_t userdata,
-         .type = type,
-         .change_ts = 1, // force initial event
-         .refcount = 1,
-+        .value = m_option_value_default,
-+        .value_ret = m_option_value_default,
-     };
-     ctx->properties_change_ts += 1;
-     MP_TARRAY_APPEND(ctx, ctx->properties, ctx->num_properties, prop);
-@@ -1682,7 +1684,7 @@ static void send_client_property_changes(struct mpv_handle *ctx)
-         bool changed = false;
-         if (prop->format) {
-             const struct m_option *type = prop->type;
--            union m_option_value val = {0};
-+            union m_option_value val = m_option_value_default;
-             struct getproperty_request req = {
-                 .mpctx = ctx->mpctx,
-                 .name = prop->name,
-diff --git a/player/command.c b/player/command.c
-index 0eb13a7eed..f9add30bc2 100644
---- a/player/command.c
-+++ b/player/command.c
-@@ -3419,7 +3419,7 @@ static int mp_property_option_info(void *ctx, struct m_property *prop,
-             return M_PROPERTY_UNKNOWN;
-         const struct m_option *opt = co->opt;
- 
--        union m_option_value def = {0};
-+        union m_option_value def = m_option_value_default;
-         const void *def_ptr = m_config_get_co_default(mpctx->mconfig, co);
-         if (def_ptr && opt->type->size > 0)
-             memcpy(&def, def_ptr, opt->type->size);
-@@ -4725,7 +4725,7 @@ static void cmd_cycle_values(void *p)
-         return;
-     }
- 
--    union m_option_value curval = {0};
-+    union m_option_value curval = m_option_value_default;
-     r = mp_property_do(name, M_PROPERTY_GET, &curval, mpctx);
-     if (r <= 0) {
-         show_property_status(cmd, name, r);
-@@ -4734,7 +4734,7 @@ static void cmd_cycle_values(void *p)
- 
-     int current = -1;
-     for (int n = first; n < cmd->num_args; n++) {
--        union m_option_value val = {0};
-+        union m_option_value val = m_option_value_default;
-         if (m_option_parse(mpctx->log, &prop, bstr0(name),
-                            bstr0(cmd->args[n].v.s), &val) < 0)
-             continue;
-@@ -5138,7 +5138,7 @@ static void cmd_change_list(void *p)
-         return;
-     }
- 
--    union m_option_value val = {0};
-+    union m_option_value val = m_option_value_default;
-     if (mp_property_do(name, M_PROPERTY_GET, &val, mpctx) <= 0) {
-         set_osd_msg(mpctx, osdl, osd_duration, "Could not read: '%s'", name);
-         cmd->success = false;
-diff --git a/player/loadfile.c b/player/loadfile.c
-index 851413bb06..b3b6d452ed 100644
---- a/player/loadfile.c
-+++ b/player/loadfile.c
-@@ -1276,6 +1276,10 @@ static void open_demux_reentrant(struct MPContext *mpctx)
-     if (!mpctx->open_active)
-         start_open(mpctx, url, mpctx->playing->stream_flags, false);
- 
-+    // If thread failed to start, cancel the playback
-+    if (!mpctx->open_active)
-+        goto cancel;
-+
-     // User abort should cancel the opener now.
-     mp_cancel_set_parent(mpctx->open_cancel, mpctx->playback_abort);
- 
-@@ -1294,6 +1298,7 @@ static void open_demux_reentrant(struct MPContext *mpctx)
-         mpctx->error_playing = mpctx->open_res_error;
-     }
- 
-+cancel:
-     cancel_open(mpctx); // cleanup
- }
- 
 diff --git a/sub/filter_regex.c b/sub/filter_regex.c
 index 8e299918ce..c7b08f5273 100644
 --- a/sub/filter_regex.c
@@ -1046,68 +814,42 @@ index e4e5652875..6b57464b32 100644
                                 sd->global, sd->log);
      }
 diff --git a/video/decode/vd_lavc.c b/video/decode/vd_lavc.c
-index 2106dcb56e..d17bd8c4cf 100644
+index 2106dcb56e..893484e2fd 100644
 --- a/video/decode/vd_lavc.c
 +++ b/video/decode/vd_lavc.c
 @@ -246,6 +246,8 @@ const struct autoprobe_info hwdec_autoprobe_info[] = {
      {"vdpau-copy",      HWDEC_FLAG_AUTO | HWDEC_FLAG_WHITELIST},
      {"drm",             HWDEC_FLAG_AUTO | HWDEC_FLAG_WHITELIST},
      {"drm-copy",        HWDEC_FLAG_AUTO | HWDEC_FLAG_WHITELIST},
-+    {"nvtegra",         HWDEC_FLAG_AUTO | HWDEC_FLAG_WHITELIST},
-+    {"nvtegra-copy",    HWDEC_FLAG_AUTO | HWDEC_FLAG_WHITELIST},
++    {"envideo",         HWDEC_FLAG_AUTO | HWDEC_FLAG_WHITELIST},
++    {"envideo-copy",    HWDEC_FLAG_AUTO | HWDEC_FLAG_WHITELIST},
      {"mmal",            HWDEC_FLAG_AUTO},
      {"mmal-copy",       HWDEC_FLAG_AUTO | HWDEC_FLAG_WHITELIST},
      {"mediacodec",      HWDEC_FLAG_AUTO},
 diff --git a/video/fmt-conversion.c b/video/fmt-conversion.c
-index aa7d857341..088cb8366f 100644
+index aa7d857341..ac7bbf1c4a 100644
 --- a/video/fmt-conversion.c
 +++ b/video/fmt-conversion.c
 @@ -64,6 +64,7 @@ static const struct {
      {IMGFMT_D3D11, AV_PIX_FMT_D3D11},
      {IMGFMT_MMAL, AV_PIX_FMT_MMAL},
      {IMGFMT_CUDA, AV_PIX_FMT_CUDA},
-+    {IMGFMT_NVTEGRA, AV_PIX_FMT_NVTEGRA},
++    {IMGFMT_ENVIDEO, AV_PIX_FMT_ENVIDEO},
      {IMGFMT_P010, AV_PIX_FMT_P010},
      {IMGFMT_DRMPRIME, AV_PIX_FMT_DRM_PRIME},
  #if HAVE_VULKAN_INTEROP
 diff --git a/video/img_format.h b/video/img_format.h
-index 2091e00598..69bba528e6 100644
+index 2091e00598..9efe123c54 100644
 --- a/video/img_format.h
 +++ b/video/img_format.h
 @@ -278,6 +278,7 @@ enum mp_imgfmt {
      IMGFMT_MMAL,            // MMAL_BUFFER_HEADER_T
      IMGFMT_MEDIACODEC,      // AVMediaCodecBuffer
      IMGFMT_CUDA,            // CUDA Buffer
-+    IMGFMT_NVTEGRA,         // AVNVTegraMap
++    IMGFMT_ENVIDEO,         // AvEnvideoFrame
  
      // Not an actual format; base for mpv-specific descriptor table.
      // Some may still map to AV_PIX_FMT_*.
-diff --git a/video/mp_image.c b/video/mp_image.c
-index 40678d10bd..0baddd3e78 100644
---- a/video/mp_image.c
-+++ b/video/mp_image.c
-@@ -176,7 +176,7 @@ static bool mp_image_alloc_planes(struct mp_image *mpi)
-         return false;
- 
-     // Note: mp_image_pool assumes this creates only 1 AVBufferRef.
--    mpi->bufs[0] = av_buffer_alloc(size + align);
-+    mpi->bufs[0] = av_buffer_aligned_alloc(size + align, 0x100); // Alignment required for plane offsets
-     if (!mpi->bufs[0])
-         return false;
- 
-diff --git a/video/mp_image.h b/video/mp_image.h
-index 98dd666412..376e269356 100644
---- a/video/mp_image.h
-+++ b/video/mp_image.h
-@@ -32,7 +32,7 @@
- // libraries except libavcodec don't really know what alignment they want.
- // Things will randomly crash or get slower if the alignment is not satisfied.
- // Whatever. This value should be pretty safe with current CPU architectures.
--#define MP_IMAGE_BYTE_ALIGN 64
-+#define MP_IMAGE_BYTE_ALIGN 256 // VIC alignement
- 
- #define MP_IMGFIELD_TOP_FIRST 0x02
- #define MP_IMGFIELD_REPEAT_FIRST 0x04
 diff --git a/video/out/deko3d/common.h b/video/out/deko3d/common.h
 new file mode 100644
 index 0000000000..b8b6e1545a
@@ -2801,14 +2543,14 @@ index 0000000000..5a4af9909b
 +void ra_dk_register_texture(struct ra *ra, struct ra_tex *tex);
 +void ra_dk_unregister_texture(struct ra *ra, struct ra_tex_dk *tex);
 diff --git a/video/out/gpu/hwdec.c b/video/out/gpu/hwdec.c
-index 878ac148fb..72a6965dc1 100644
+index 878ac148fb..40a4a42963 100644
 --- a/video/out/gpu/hwdec.c
 +++ b/video/out/gpu/hwdec.c
 @@ -39,6 +39,7 @@ extern const struct ra_hwdec_driver ra_hwdec_drmprime;
  extern const struct ra_hwdec_driver ra_hwdec_drmprime_overlay;
  extern const struct ra_hwdec_driver ra_hwdec_aimagereader;
  extern const struct ra_hwdec_driver ra_hwdec_vulkan;
-+extern const struct ra_hwdec_driver ra_hwdec_nvtegra;
++extern const struct ra_hwdec_driver ra_hwdec_envideo;
  
  const struct ra_hwdec_driver *const ra_hwdec_drivers[] = {
  #if HAVE_VAAPI_EGL || HAVE_VAAPI_LIBPLACEBO
@@ -2817,7 +2559,7 @@ index 878ac148fb..72a6965dc1 100644
      &ra_hwdec_vulkan,
  #endif
 +#if HAVE_DEKO3D
-+    &ra_hwdec_nvtegra,
++    &ra_hwdec_envideo,
 +#endif
  
      NULL
@@ -2936,7 +2678,7 @@ index 4233f14336..13036ee16a 100644
              .target_prim = p->opts.target_prim,
 diff --git a/video/out/hwdec/hwdec_deko3d.c b/video/out/hwdec/hwdec_deko3d.c
 new file mode 100644
-index 0000000000..d90c10333b
+index 0000000000..d94e2dd9bc
 --- /dev/null
 +++ b/video/out/hwdec/hwdec_deko3d.c
 @@ -0,0 +1,288 @@
@@ -2963,8 +2705,7 @@ index 0000000000..d90c10333b
 +#include <switch.h>
 +
 +#include <libavutil/hwcontext.h>
-+#include <libavutil/hwcontext_nvtegra.h>
-+#include <libavutil/nvtegra.h>
++#include <libavutil/hwcontext_envideo.h>
 +
 +#include "config.h"
 +
@@ -2988,7 +2729,6 @@ index 0000000000..d90c10333b
 +    bool is_linear;
 +
 +    struct cached_texture {
-+        AVBufferRef *buf_ref;
 +        AVHWFramesContext *frames_ctx;
 +
 +        uint32_t handle;
@@ -2999,13 +2739,16 @@ index 0000000000..d90c10333b
 +};
 +
 +// NVDEC can render to NV12 and YV12 surfaces, the FFmpeg backend hardcodes for NV12
-+// NVJPG can decode to grayscale surfaces
++// NVJPG can decode to grayscale, YUV422P, YUV440P and YUV444P surfaces
 +// Some filters will output YUV420P and upload that to a hardware surface
 +static const int supported_formats[] = {
 +    IMGFMT_Y8,
 +    IMGFMT_NV12,
 +    IMGFMT_P010,
 +    IMGFMT_420P,
++    IMGFMT_444P,
++    IMGFMT_AVPIXFMT_START + AV_PIX_FMT_YUV422P,
++    IMGFMT_AVPIXFMT_START + AV_PIX_FMT_YUV440P,
 +    IMGFMT_NONE,
 +};
 +
@@ -3015,7 +2758,7 @@ index 0000000000..d90c10333b
 +    MP_VERBOSE(hw, "%s\n", __func__);
 +
 +    AVBufferRef *hw_device_ctx = NULL;
-+    if ((av_hwdevice_ctx_create(&hw_device_ctx, AV_HWDEVICE_TYPE_NVTEGRA, NULL, NULL, 0) < 0)
++    if ((av_hwdevice_ctx_create(&hw_device_ctx, AV_HWDEVICE_TYPE_ENVIDEO, NULL, NULL, 0) < 0)
 +            || (hw_device_ctx == NULL))
 +        goto error;
 +
@@ -3023,7 +2766,7 @@ index 0000000000..d90c10333b
 +        .driver_name       = hw->driver->name,
 +        .av_device_ref     = hw_device_ctx,
 +        .supported_formats = supported_formats,
-+        .hw_imgfmt         = IMGFMT_NVTEGRA,
++        .hw_imgfmt         = IMGFMT_ENVIDEO,
 +    };
 +    hwdec_devices_add(hw->devs, &priv->hwctx);
 +
@@ -3092,8 +2835,6 @@ index 0000000000..d90c10333b
 +
 +    if (e->memblock)
 +        dkMemBlockDestroy(e->memblock);
-+
-+    av_buffer_unref(&e->buf_ref);
 +}
 +
 +static void mapper_uninit(struct ra_hwdec_mapper *mapper) {
@@ -3107,19 +2848,18 @@ index 0000000000..d90c10333b
 +
 +static int mapper_map(struct ra_hwdec_mapper *mapper) {
 +    struct priv *priv = mapper->priv;
-+    AVNVTegraFrame *frame = (AVNVTegraFrame *)mapper->src->bufs[0]->data;
-+    AVNVTegraMap *map = (AVNVTegraMap *)frame->map_ref->data;
++    AVEnvideoFrame *frame = (AVEnvideoFrame *)mapper->src->bufs[0]->data;
++    EnvideoMap *map = (EnvideoMap *)frame->map;
 +
-+    if ((priv->is_linear != map->is_linear) || !priv->has_calculated_layouts) {
-+        priv->is_linear = map->is_linear;
++    if ((priv->is_linear != frame->is_pitch) || !priv->has_calculated_layouts) {
++        priv->is_linear = frame->is_pitch;
 +
 +        for (int i = 0; i < priv->num_planes; ++i) {
 +            struct ra_tex_params *params = &mapper->tex[i]->params;
 +
 +            // If the width (aligned to relevant boundaries) is not equal to the stride
 +            // (for example because of cropping), set it to the latter
-+            //  Alignment is 64B for block (GOB requirement) and 256B for pitch linear (VIC requirement)
-+            int align = (!map->is_linear ? 64 : 256)  / mapper->tex[i]->params.format->pixel_size;
++            int align = ENVIDEO_WIDTH_ALIGN(mapper->tex[i]->params.format->pixel_size);
 +            int texel_stride = mapper->src->stride[i] / mapper->tex[i]->params.format->pixel_size;
 +            if (MP_ALIGN_UP(params->w, align) != texel_stride)
 +                params->w = texel_stride;
@@ -3147,9 +2887,8 @@ index 0000000000..d90c10333b
 +        priv->has_calculated_layouts = true;
 +    }
 +
-+    AVHWFramesContext *hwctx = (AVHWFramesContext *)mapper->src->hwctx->data;
-+
 +    // Clean up stale cached frames
++    AVHWFramesContext *hwctx = (AVHWFramesContext *)mapper->src->hwctx->data;
 +    for (int i = priv->num_cached_textures - 1; i >= 0; --i) {
 +        if (priv->cached_textures[i].frames_ctx != hwctx) {
 +            destroy_cache_entry(mapper, &priv->cached_textures[i]);
@@ -3157,55 +2896,58 @@ index 0000000000..d90c10333b
 +        }
 +    }
 +
++    // Wait for the decode to complete
++    // Submit immediately so that deko3d doesn't keep a dangling pointer to the decode fence
++    DkFence fence;
++    dkFenceImport(&fence, frame->fence >> 32, frame->fence >> 0);
++    dkCmdBufWaitFence(priv->dk->cmdbuf, &fence);
++    dkQueueSubmitCommands(priv->dk->queue, dkCmdBufFinishList(priv->dk->cmdbuf));
++
 +    for (int i = 0; i < priv->num_cached_textures; ++i) {
-+        if (priv->cached_textures[i].handle == av_nvtegra_map_get_handle(map)) {
++        struct cached_texture *e = &priv->cached_textures[i];
++        if (e->handle == envideo_map_get_handle(map)) {
 +            for (int j = 0; j < priv->num_planes; ++j)
-+                mapper->tex[j]->priv = priv->cached_textures[i].tex[j];
++                mapper->tex[j]->priv = e->tex[j];
 +
 +            // Invalidate texture cache
 +            dkCmdBufBarrier(priv->dk->cmdbuf, DkBarrier_None, DkInvalidateFlags_Image);
 +            dkQueueSubmitCommands(priv->dk->queue, dkCmdBufFinishList(priv->dk->cmdbuf));
-+
 +            return 0;
 +        }
 +    }
 +
-+    struct cached_texture cache;
-+    cache.buf_ref = av_buffer_ref(frame->map_ref);
-+    if (!cache.buf_ref)
-+        return -1;
-+
-+    cache.handle = av_nvtegra_map_get_handle(map);
-+    cache.frames_ctx = hwctx;
++    struct cached_texture e = {0};
++    e.frames_ctx = hwctx;
++    e.handle     = envideo_map_get_handle(map);
 +
 +    DkMemBlockMaker memblock_maker;
-+    dkMemBlockMakerDefaults(&memblock_maker, priv->dk->device, av_nvtegra_map_get_size(map));
++    dkMemBlockMakerDefaults(&memblock_maker, priv->dk->device, envideo_map_get_size(map));
 +    memblock_maker.flags   = DkMemBlockFlags_CpuUncached |
 +        DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image;
-+    memblock_maker.storage = av_nvtegra_map_get_addr(map);
-+    cache.memblock = dkMemBlockCreate(&memblock_maker);
-+    if (!cache.memblock)
++    memblock_maker.storage = envideo_map_get_cpu_addr(map);
++    e.memblock = dkMemBlockCreate(&memblock_maker);
++    if (!e.memblock)
 +        return -1;
 +
 +    for (int i = 0; i < priv->num_planes; ++i) {
 +        DkImage image;
-+        dkImageInitialize(&image, &priv->dklayouts[i], cache.memblock,
++        dkImageInitialize(&image, &priv->dklayouts[i], e.memblock,
 +            (uintptr_t)(mapper->src->planes[i] - mapper->src->planes[0]));
 +
 +        struct ra_tex_dk *tex_priv = mapper->tex[i]->priv = talloc_zero(mapper->tex[i], struct ra_tex_dk);
 +        if (!tex_priv) {
-+            dkMemBlockDestroy(cache.memblock);
++            dkMemBlockDestroy(e.memblock);
 +            return -1;
 +        }
 +
 +        tex_priv->image    = image;
-+        tex_priv->memblock = cache.memblock;
++        tex_priv->memblock = e.memblock;
 +
 +        ra_dk_register_texture(mapper->ra, mapper->tex[i]);
-+        cache.tex[i] = mapper->tex[i]->priv;
++        e.tex[i] = mapper->tex[i]->priv;
 +    }
 +
-+    MP_TARRAY_APPEND(mapper, priv->cached_textures, priv->num_cached_textures, cache);
++    MP_TARRAY_APPEND(mapper, priv->cached_textures, priv->num_cached_textures, e);
 +
 +    return 0;
 +}
@@ -3214,10 +2956,10 @@ index 0000000000..d90c10333b
 +    // Do nothing
 +}
 +
-+const struct ra_hwdec_driver ra_hwdec_nvtegra = {
-+    .name          = "nvtegra",
++const struct ra_hwdec_driver ra_hwdec_envideo = {
++    .name          = "envideo",
 +    .priv_size     = sizeof(struct priv_owner),
-+    .imgfmts       = {IMGFMT_NVTEGRA, 0},
++    .imgfmts       = {IMGFMT_ENVIDEO, 0},
 +    .init          = init,
 +    .uninit        = uninit,
 +    .mapper        = &(const struct ra_hwdec_mapper_driver){

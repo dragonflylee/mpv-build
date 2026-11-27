@@ -1,0 +1,802 @@
+diff --git a/audio/decode/ad_spdif.c b/audio/decode/ad_spdif.c
+index decd97206d..1c49b2c031 100644
+--- a/audio/decode/ad_spdif.c
++++ b/audio/decode/ad_spdif.c
+@@ -37,6 +37,12 @@
+ 
+ #define OUTBUF_SIZE 65536
+ 
++#if LIBAVCODEC_VERSION_INT < AV_VERSION_INT(60, 26, 100)
++#define AV_PROFILE_UNKNOWN FF_PROFILE_UNKNOWN
++#define AV_PROFILE_DTS_HD_HRA FF_PROFILE_DTS_HD_HRA
++#define AV_PROFILE_DTS_HD_MA FF_PROFILE_DTS_HD_MA
++#endif
++
+ struct spdifContext {
+     struct mp_log   *log;
+     enum AVCodecID   codec_id;
+@@ -90,7 +96,7 @@ static void determine_codec_params(struct mp_filter *da, AVPacket *pkt,
+                                    int *out_profile, int *out_rate)
+ {
+     struct spdifContext *spdif_ctx = da->priv;
+-    int profile = FF_PROFILE_UNKNOWN;
++    int profile = AV_PROFILE_UNKNOWN;
+     AVCodecContext *ctx = NULL;
+     AVFrame *frame = NULL;
+ 
+@@ -115,7 +121,7 @@ static void determine_codec_params(struct mp_filter *da, AVPacket *pkt,
+         av_parser_close(parser);
+     }
+ 
+-    if (profile != FF_PROFILE_UNKNOWN || spdif_ctx->codec_id != AV_CODEC_ID_DTS)
++    if (profile != AV_PROFILE_UNKNOWN  || spdif_ctx->codec_id != AV_CODEC_ID_DTS)
+         return;
+ 
+     const AVCodec *codec = avcodec_find_decoder(spdif_ctx->codec_id);
+@@ -145,7 +151,7 @@ done:
+     av_frame_free(&frame);
+     avcodec_free_context(&ctx);
+ 
+-    if (profile == FF_PROFILE_UNKNOWN)
++    if (profile == AV_PROFILE_UNKNOWN)
+         MP_WARN(da, "Failed to parse codec profile.\n");
+ }
+ 
+@@ -153,7 +159,7 @@ static int init_filter(struct mp_filter *da, AVPacket *pkt)
+ {
+     struct spdifContext *spdif_ctx = da->priv;
+ 
+-    int profile = FF_PROFILE_UNKNOWN;
++    int profile = AV_PROFILE_UNKNOWN;
+     int c_rate = 0;
+     determine_codec_params(da, pkt, &profile, &c_rate);
+     MP_VERBOSE(da, "In: profile=%d samplerate=%d\n", profile, c_rate);
+@@ -206,15 +212,15 @@ static int init_filter(struct mp_filter *da, AVPacket *pkt)
+         num_channels                    = 2;
+         break;
+     case AV_CODEC_ID_DTS: {
+-        bool is_hd = profile == FF_PROFILE_DTS_HD_HRA ||
+-                     profile == FF_PROFILE_DTS_HD_MA  ||
+-                     profile == FF_PROFILE_UNKNOWN;
++        bool is_hd = profile == AV_PROFILE_DTS_HD_HRA ||
++                     profile == AV_PROFILE_DTS_HD_MA  ||
++                     profile == AV_PROFILE_UNKNOWN;
+ 
+         // Apparently, DTS-HD over SPDIF is specified to be 7.1 (8 channels)
+         // for DTS-HD MA, and stereo (2 channels) for DTS-HD HRA. The bit
+         // streaming rate as well as the signaled channel count are defined
+         // based on this value.
+-        int dts_hd_spdif_channel_count = profile == FF_PROFILE_DTS_HD_HRA ?
++        int dts_hd_spdif_channel_count = profile == AV_PROFILE_DTS_HD_HRA ?
+                                          2 : 8;
+         if (spdif_ctx->use_dts_hd && is_hd) {
+             av_dict_set_int(&format_opts, "dtshd_rate",
+diff --git a/audio/filter/af_lavcac3enc.c b/audio/filter/af_lavcac3enc.c
+index b4a1d59fe7..4f9160da75 100644
+--- a/audio/filter/af_lavcac3enc.c
++++ b/audio/filter/af_lavcac3enc.c
+@@ -45,6 +45,7 @@
+ #include "filters/filter_internal.h"
+ #include "filters/user_filters.h"
+ #include "options/m_option.h"
++#include "misc/lavc_compat.h"
+ 
+ 
+ #define AC3_MAX_CHANNELS 6
+@@ -103,7 +104,15 @@ static bool reinit(struct mp_filter *f)
+     if (!bit_rate && chmap.num < AC3_MAX_CHANNELS + 1)
+         bit_rate = default_bit_rate[chmap.num];
+ 
+-    avcodec_close(s->lavc_actx);
++    avcodec_free_context(&s->lavc_actx);
++    s->lavc_actx = avcodec_alloc_context3(s->lavc_acodec);
++    if (!s->lavc_actx) {
++        MP_ERR(f, "Audio LAVC, couldn't reallocate context!\n");
++        return false;
++    }
++
++    if (mp_set_avopts(f->log, s->lavc_actx, s->opts->avopts) < 0)
++        return false;
+ 
+     // Put sample parameters
+     s->lavc_actx->sample_fmt = af_to_avformat(format);
+@@ -280,19 +289,14 @@ static const struct mp_filter_info af_lavcac3enc_filter = {
+ 
+ static void add_chmaps_to_autoconv(struct mp_filter *f,
+                                    struct mp_autoconvert *conv,
+-                                   const struct AVCodec *codec)
++                                   const AVCodecContext *avctx)
+ {
+-#if !HAVE_AV_CHANNEL_LAYOUT
+-    const uint64_t *lch = codec->channel_layouts;
+-    for (int n = 0; lch && lch[n]; n++) {
+-        struct mp_chmap chmap = {0};
+-        mp_chmap_from_lavc(&chmap, lch[n]);
+-        if (mp_chmap_is_valid(&chmap))
+-            mp_autoconvert_add_chmap(conv, &chmap);
+-    }
+-#else
+-    const AVChannelLayout *lch = codec->ch_layouts;
+-    for (int n = 0; lch && lch[n].nb_channels; n++) {
++    const AVChannelLayout *lch;
++    int ret = mp_avcodec_get_supported_config(avctx, NULL,
++                                              AV_CODEC_CONFIG_CHANNEL_LAYOUT,
++                                              (const void **)&lch);
++
++    for (int n = 0; ret >= 0 && lch && lch[n].nb_channels; n++) {
+         struct mp_chmap chmap = {0};
+ 
+         if (!mp_chmap_from_av_layout(&chmap, &lch[n])) {
+@@ -307,7 +311,6 @@ static void add_chmaps_to_autoconv(struct mp_filter *f,
+         if (mp_chmap_is_valid(&chmap))
+             mp_autoconvert_add_chmap(conv, &chmap);
+     }
+-#endif
+ }
+ 
+ static struct mp_filter *af_lavcac3enc_create(struct mp_filter *parent,
+@@ -346,17 +349,20 @@ static struct mp_filter *af_lavcac3enc_create(struct mp_filter *parent,
+     if (mp_set_avopts(f->log, s->lavc_actx, s->opts->avopts) < 0)
+         goto error;
+ 
++    const AVChannelLayout *ch_layouts;
++    int ret_ch = mp_avcodec_get_supported_config(s->lavc_actx, s->lavc_acodec,
++                                                 AV_CODEC_CONFIG_CHANNEL_LAYOUT,
++                                                 (const void **)&ch_layouts);
++
++    const enum AVSampleFormat *sample_fmts;
++    int ret_fmt = mp_avcodec_get_supported_config(s->lavc_actx, s->lavc_acodec,
++                                                  AV_CODEC_CONFIG_SAMPLE_FORMAT,
++                                                  (const void **)&sample_fmts);
++
+     // For this one, we require the decoder to export lists of all supported
+     // parameters. (Not all decoders do that, but the ones we're interested
+     // in do.)
+-    if (!s->lavc_acodec->sample_fmts ||
+-#if !HAVE_AV_CHANNEL_LAYOUT
+-        !s->lavc_acodec->channel_layouts
+-#else
+-        !s->lavc_acodec->ch_layouts
+-#endif
+-        )
+-    {
++    if (ret_ch < 0 || !ch_layouts || ret_fmt < 0 || !sample_fmts) {
+         MP_ERR(f, "Audio encoder doesn't list supported parameters.\n");
+         goto error;
+     }
+@@ -380,14 +386,13 @@ static struct mp_filter *af_lavcac3enc_create(struct mp_filter *parent,
+     if (!conv)
+         abort();
+ 
+-    const enum AVSampleFormat *lf = s->lavc_acodec->sample_fmts;
+-    for (int i = 0; lf && lf[i] != AV_SAMPLE_FMT_NONE; i++) {
+-        int mpfmt = af_from_avformat(lf[i]);
++    for (int i = 0; sample_fmts[i] != AV_SAMPLE_FMT_NONE; i++) {
++        int mpfmt = af_from_avformat(sample_fmts[i]);
+         if (mpfmt)
+             mp_autoconvert_add_afmt(conv, mpfmt);
+     }
+ 
+-    add_chmaps_to_autoconv(f, conv, s->lavc_acodec);
++    add_chmaps_to_autoconv(f, conv, s->lavc_actx);
+ 
+     // At least currently, the AC3 encoder doesn't export sample rates.
+     mp_autoconvert_add_srate(conv, 48000);
+diff --git a/audio/out/ao_lavc.c b/audio/out/ao_lavc.c
+index 84cb32b25a..321d2f68bf 100644
+--- a/audio/out/ao_lavc.c
++++ b/audio/out/ao_lavc.c
+@@ -36,6 +36,7 @@
+ #include "audio/fmt-conversion.h"
+ #include "filters/filter_internal.h"
+ #include "filters/f_utils.h"
++#include "misc/lavc_compat.h"
+ #include "mpv_talloc.h"
+ #include "ao.h"
+ #include "internal.h"
+@@ -64,9 +65,13 @@ static bool write_frame(struct ao *ao, struct mp_frame frame);
+ 
+ static bool supports_format(const AVCodec *codec, int format)
+ {
+-    for (const enum AVSampleFormat *sampleformat = codec->sample_fmts;
+-         sampleformat && *sampleformat != AV_SAMPLE_FMT_NONE;
+-         sampleformat++)
++    const enum AVSampleFormat *sampleformat;
++    int ret = mp_avcodec_get_supported_config(NULL, codec,
++                                              AV_CODEC_CONFIG_SAMPLE_FORMAT,
++                                              (const void **)&sampleformat);
++    if (ret >= 0 && !sampleformat)
++        return true;
++    for (; ret >= 0 && *sampleformat != AV_SAMPLE_FMT_NONE; sampleformat++)
+     {
+         if (af_from_avformat(*sampleformat) == format)
+             return true;
+@@ -110,8 +115,14 @@ static int init(struct ao *ao)
+     AVCodecContext *encoder = ac->enc->encoder;
+     const AVCodec *codec = encoder->codec;
+ 
+-    int samplerate = af_select_best_samplerate(ao->samplerate,
+-                                               codec->supported_samplerates);
++    const int *samplerates;
++    int ret = mp_avcodec_get_supported_config(NULL, codec,
++                                              AV_CODEC_CONFIG_SAMPLE_RATE,
++                                              (const void **)&samplerates);
++
++    int samplerate = 0;
++    if (ret >= 0)
++        samplerate = af_select_best_samplerate(ao->samplerate, samplerates);
+     if (samplerate > 0)
+         ao->samplerate = samplerate;
+ 
+diff --git a/common/encode_lavc.c b/common/encode_lavc.c
+index 7a9a20a517..a8135d4961 100644
+--- a/common/encode_lavc.c
++++ b/common/encode_lavc.c
+@@ -920,7 +920,7 @@ bool encoder_init_codec_and_muxer(struct encoder_context *p,
+     return true;
+ 
+ fail:
+-    avcodec_close(p->encoder);
++    avcodec_free_context(&p->encoder);
+     return false;
+ }
+ 
+diff --git a/demux/demux_lavf.c b/demux/demux_lavf.c
+index 166bc8f908..2d1e7c4606 100644
+--- a/demux/demux_lavf.c
++++ b/demux/demux_lavf.c
+@@ -605,10 +605,17 @@ static void select_tracks(struct demuxer *demuxer, int start)
+ static void export_replaygain(demuxer_t *demuxer, struct sh_stream *sh,
+                               AVStream *st)
+ {
+-    for (int i = 0; i < st->nb_side_data; i++) {
++#if LIBAVFORMAT_VERSION_INT >= AV_VERSION_INT(60, 15, 100)
++    AVPacketSideData *side_data = st->codecpar->coded_side_data;
++    int nb_side_data = st->codecpar->nb_coded_side_data;
++#else
++    AVPacketSideData *side_data = st->side_data;
++    int nb_side_data = st->nb_side_data;
++#endif
++    for (int i = 0; i < nb_side_data; i++) {
+         AVReplayGain *av_rgain;
+         struct replaygain_data *rgain;
+-        AVPacketSideData *src_sd = &st->side_data[i];
++        AVPacketSideData *src_sd = &side_data[i];
+ 
+         if (src_sd->type != AV_PKT_DATA_REPLAYGAIN)
+             continue;
+@@ -672,6 +679,20 @@ static bool is_image(AVStream *st, bool attached_picture, const AVInputFormat *a
+     );
+ }
+ 
++#if LIBAVFORMAT_VERSION_INT >= AV_VERSION_INT(60, 15, 100)
++static inline const uint8_t *mp_av_stream_get_side_data(const AVStream *st,
++                                                        enum AVPacketSideDataType type)
++{
++    const AVPacketSideData *sd;
++    sd = av_packet_side_data_get(st->codecpar->coded_side_data,
++                                 st->codecpar->nb_coded_side_data,
++                                 type);
++    return sd ? sd->data : NULL;
++}
++#else
++#define mp_av_stream_get_side_data(st, type) av_stream_get_side_data(st, type, NULL)
++#endif
++
+ static void handle_new_stream(demuxer_t *demuxer, int i)
+ {
+     lavf_priv_t *priv = demuxer->priv;
+@@ -751,14 +772,14 @@ static void handle_new_stream(demuxer_t *demuxer, int i)
+         sh->codec->par_w = st->sample_aspect_ratio.num;
+         sh->codec->par_h = st->sample_aspect_ratio.den;
+ 
+-        uint8_t *sd = av_stream_get_side_data(st, AV_PKT_DATA_DISPLAYMATRIX, NULL);
++        const uint8_t *sd = mp_av_stream_get_side_data(st, AV_PKT_DATA_DISPLAYMATRIX);
+         if (sd) {
+-            double r = av_display_rotation_get((uint32_t *)sd);
++            double r = av_display_rotation_get((int32_t *)sd);
+             if (!isnan(r))
+                 sh->codec->rotate = (((int)(-r) % 360) + 360) % 360;
+         }
+ 
+-        if ((sd = av_stream_get_side_data(st, AV_PKT_DATA_DOVI_CONF, NULL))) {
++        if ((sd = mp_av_stream_get_side_data(st, AV_PKT_DATA_DOVI_CONF))) {
+             const AVDOVIDecoderConfigurationRecord *cfg = (void *) sd;
+             MP_VERBOSE(demuxer, "Found Dolby Vision config record: profile "
+                        "%d level %d\n", cfg->dv_profile, cfg->dv_level);
+@@ -1209,11 +1230,12 @@ static bool demux_lavf_read_packet(struct demuxer *demux,
+ {
+     lavf_priv_t *priv = demux->priv;
+ 
+-    AVPacket *pkt = &(AVPacket){0};
++    AVPacket *pkt = av_packet_alloc();
++    MP_HANDLE_OOM(pkt);
+     int r = av_read_frame(priv->avfc, pkt);
+     update_read_stats(demux);
+     if (r < 0) {
+-        av_packet_unref(pkt);
++        av_packet_free(&pkt);
+         if (r == AVERROR_EOF)
+             return false;
+         MP_WARN(demux, "error reading packet: %s.\n", av_err2str(r));
+@@ -1235,13 +1257,13 @@ static bool demux_lavf_read_packet(struct demuxer *demux,
+     AVStream *st = priv->avfc->streams[pkt->stream_index];
+ 
+     if (!demux_stream_is_selected(stream)) {
+-        av_packet_unref(pkt);
++        av_packet_free(&pkt);
+         return true; // don't signal EOF if skipping a packet
+     }
+ 
+-    struct demux_packet *dp = new_demux_packet_from_avpacket(pkt);
++    struct demux_packet *dp = new_demux_packet_from_avpacket(demux->packet_pool, pkt);
+     if (!dp) {
+-        av_packet_unref(pkt);
++        av_packet_free(&pkt);
+         return true;
+     }
+ 
+@@ -1255,7 +1277,7 @@ static bool demux_lavf_read_packet(struct demuxer *demux,
+     dp->keyframe = pkt->flags & AV_PKT_FLAG_KEY;
+     if (pkt->flags & AV_PKT_FLAG_DISCARD)
+         MP_ERR(demux, "Edit lists are not correctly supported (FFmpeg issue).\n");
+-    av_packet_unref(pkt);
++    av_packet_free(&pkt);
+ 
+     if (priv->format_hack.clear_filepos)
+         dp->pos = -1;
+diff --git a/demux/demux_mkv.c b/demux/demux_mkv.c
+index c330709d23..e711ee3adb 100644
+--- a/demux/demux_mkv.c
++++ b/demux/demux_mkv.c
+@@ -1886,16 +1886,16 @@ static int demux_mkv_open_sub(demuxer_t *demuxer, mkv_track_t *track)
+             // [0x30..0x37] are component tags utilized for
+             // non-mobile captioning service ("profile A").
+             if (component_tag >= 0x30 && component_tag <= 0x37)
+-                lav->profile = FF_PROFILE_ARIB_PROFILE_A;
++                lav->profile = AV_PROFILE_ARIB_PROFILE_A;
+             break;
+         case 0x0012:
+             // component tag 0x87 signifies a mobile/partial reception
+             // (1seg) captioning service ("profile C").
+             if (component_tag == 0x87)
+-                lav->profile = FF_PROFILE_ARIB_PROFILE_C;
++                lav->profile = AV_PROFILE_ARIB_PROFILE_C;
+             break;
+         }
+-        if (lav->profile == FF_PROFILE_UNKNOWN)
++        if (lav->profile == AV_PROFILE_UNKNOWN)
+             MP_WARN(demuxer, "ARIB caption profile %02x / %04x not supported.\n",
+                     component_tag, data_component_id);
+     }
+diff --git a/filters/f_swresample.c b/filters/f_swresample.c
+index fb1ef05194..09148b5f88 100644
+--- a/filters/f_swresample.c
++++ b/filters/f_swresample.c
+@@ -23,6 +23,7 @@
+ #include <libswresample/swresample.h>
+ 
+ #include "audio/aframe.h"
++#include "audio/chmap_avchannel.h"
+ #include "audio/fmt-conversion.h"
+ #include "audio/format.h"
+ #include "common/common.h"
+@@ -269,14 +270,28 @@ static bool configure_lavrr(struct priv *p, bool verbose)
+ 
+     out_ch_layout = fudge_layout_conversion(p, in_ch_layout, out_ch_layout);
+ 
++#if HAVE_AV_CHANNEL_LAYOUT
+     // Real conversion; output is input to avrctx_out.
++    AVChannelLayout in_layout, out_layout;
++    mp_chmap_to_av_layout(&in_layout, &in_lavc);
++    mp_chmap_to_av_layout(&out_layout, &out_lavc);
++    av_opt_set_chlayout(p->avrctx, "in_chlayout",  &in_layout, 0);
++    av_opt_set_chlayout(p->avrctx, "out_chlayout", &out_layout, 0);
++#else
+     av_opt_set_int(p->avrctx, "in_channel_layout",  in_ch_layout, 0);
+     av_opt_set_int(p->avrctx, "out_channel_layout", out_ch_layout, 0);
++#endif
+     av_opt_set_int(p->avrctx, "in_sample_rate",     p->in_rate, 0);
+     av_opt_set_int(p->avrctx, "out_sample_rate",    p->out_rate, 0);
+     av_opt_set_int(p->avrctx, "in_sample_fmt",      in_samplefmt, 0);
+     av_opt_set_int(p->avrctx, "out_sample_fmt",     out_samplefmtp, 0);
+ 
++#if HAVE_AV_CHANNEL_LAYOUT
++    AVChannelLayout fake_layout;
++    av_channel_layout_default(&fake_layout, map_out.num);
++    av_opt_set_chlayout(p->avrctx_out, "in_chlayout", &fake_layout, 0);
++    av_opt_set_chlayout(p->avrctx_out, "out_chlayout", &fake_layout, 0);
++#else
+     // Just needs the correct number of channels for deplanarization.
+     struct mp_chmap fake_chmap;
+     mp_chmap_set_unknown(&fake_chmap, map_out.num);
+@@ -285,6 +300,7 @@ static bool configure_lavrr(struct priv *p, bool verbose)
+         goto error;
+     av_opt_set_int(p->avrctx_out, "in_channel_layout",  fake_out_ch_layout, 0);
+     av_opt_set_int(p->avrctx_out, "out_channel_layout", fake_out_ch_layout, 0);
++#endif
+ 
+     av_opt_set_int(p->avrctx_out, "in_sample_fmt",      out_samplefmtp, 0);
+     av_opt_set_int(p->avrctx_out, "out_sample_fmt",     out_samplefmt, 0);
+diff --git a/misc/language.c b/misc/language.c
+index 92857f75b4..f9eb696f49 100644
+--- a/misc/language.c
++++ b/misc/language.c
+@@ -29,8 +29,8 @@
+ #include <strings.h>
+ 
+ static const struct lang {
+-    char match[4];
+-    char canonical[4];
++    char match[4] MP_NONSTRING;
++    char canonical[4] MP_NONSTRING;
+ } langmap[] = {
+     {"aa", "aar"},
+     {"ab", "abk"},
+diff --git a/misc/lavc_compat.h b/misc/lavc_compat.h
+new file mode 100644
+index 0000000000..30c6def1c6
+--- /dev/null
++++ b/misc/lavc_compat.h
+@@ -0,0 +1,72 @@
++/*
++ * This file is part of mpv.
++ *
++ * mpv is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * mpv is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#pragma once
++
++#include "config.h"
++
++#include <libavcodec/avcodec.h>
++
++#if LIBAVCODEC_VERSION_INT < AV_VERSION_INT(61, 13, 100)
++enum AVCodecConfig {
++    AV_CODEC_CONFIG_PIX_FORMAT,     ///< AVPixelFormat, terminated by AV_PIX_FMT_NONE
++    AV_CODEC_CONFIG_FRAME_RATE,     ///< AVRational, terminated by {0, 0}
++    AV_CODEC_CONFIG_SAMPLE_RATE,    ///< int, terminated by 0
++    AV_CODEC_CONFIG_SAMPLE_FORMAT,  ///< AVSampleFormat, terminated by AV_SAMPLE_FMT_NONE
++    AV_CODEC_CONFIG_CHANNEL_LAYOUT, ///< AVChannelLayout, terminated by {0}
++    AV_CODEC_CONFIG_COLOR_RANGE,    ///< AVColorRange, terminated by AVCOL_RANGE_UNSPECIFIED
++    AV_CODEC_CONFIG_COLOR_SPACE,    ///< AVColorSpace, terminated by AVCOL_SPC_UNSPECIFIED
++};
++#endif
++
++static inline int mp_avcodec_get_supported_config(const AVCodecContext *avctx,
++                                                  const AVCodec *codec,
++                                                  enum AVCodecConfig config,
++                                                  const void **out_configs)
++{
++#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(61, 13, 100)
++    return avcodec_get_supported_config(avctx, codec, config, 0, out_configs, NULL);
++#else
++    const AVCodec *avcodec = codec ? codec : avctx->codec;
++
++    switch (config) {
++    case AV_CODEC_CONFIG_PIX_FORMAT:
++        *out_configs = avcodec->pix_fmts;
++        break;
++    case AV_CODEC_CONFIG_FRAME_RATE:
++        *out_configs = avcodec->supported_framerates;
++        break;
++    case AV_CODEC_CONFIG_SAMPLE_RATE:
++        *out_configs = avcodec->supported_samplerates;
++        break;
++    case AV_CODEC_CONFIG_SAMPLE_FORMAT:
++        *out_configs = avcodec->sample_fmts;
++        break;
++    case AV_CODEC_CONFIG_CHANNEL_LAYOUT:
++#if HAVE_AV_CHANNEL_LAYOUT
++        *out_configs = avcodec->ch_layouts;
++#else
++        *out_configs = NULL;
++#endif
++        break;
++    default:
++        abort();  // Not implemented
++    }
++
++    return *out_configs ? 0 : -1;
++#endif
++}
+diff --git a/options/m_config_core.c b/options/m_config_core.c
+index 4f8c462db1..0e6f71c68b 100644
+--- a/options/m_config_core.c
++++ b/options/m_config_core.c
+@@ -105,8 +105,6 @@ struct m_group_data {
+     uint64_t ts;        // timestamp of the data copy
+ };
+ 
+-static const union m_option_value default_value = {0};
+-
+ static void add_sub_group(struct m_config_shadow *shadow, const char *name_prefix,
+                           int parent_group_index, int parent_ptr,
+                           const struct m_sub_options *subopts);
+@@ -241,7 +239,7 @@ const void *m_config_shadow_get_opt_default(struct m_config_shadow *shadow,
+     if (subopt->defaults)
+         return (char *)subopt->defaults + opt->offset;
+ 
+-    return &default_value;
++    return &m_option_value_default;
+ }
+ 
+ void *m_config_cache_get_opt_data(struct m_config_cache *cache, int32_t id)
+diff --git a/options/m_config_frontend.c b/options/m_config_frontend.c
+index 5a6db46d83..e2f492bdd6 100644
+--- a/options/m_config_frontend.c
++++ b/options/m_config_frontend.c
+@@ -758,7 +758,7 @@ int m_config_set_option_cli(struct m_config *config, struct bstr name,
+                    BSTR_P(name), BSTR_P(param), flags);
+     }
+ 
+-    union m_option_value val = {0};
++    union m_option_value val = m_option_value_default;
+ 
+     // Some option types are "impure" and work on the existing data.
+     // (Prime examples: --vf-add, --sub-file)
+@@ -792,7 +792,7 @@ int m_config_set_option_node(struct m_config *config, bstr name,
+ 
+     // Do this on an "empty" type to make setting the option strictly overwrite
+     // the old value, as opposed to e.g. appending to lists.
+-    union m_option_value val = {0};
++    union m_option_value val = m_option_value_default;
+ 
+     if (data->format == MPV_FORMAT_STRING) {
+         bstr param = bstr0(data->u.string);
+@@ -877,9 +877,8 @@ void m_config_print_option_list(const struct m_config *config, const char *name)
+         }
+         char *def = NULL;
+         const void *defptr = m_config_get_co_default(config, co);
+-        const union m_option_value default_value = {0};
+         if (!defptr)
+-            defptr = &default_value;
++            defptr = &m_option_value_default;
+         if (defptr)
+             def = m_option_pretty_print(opt, defptr);
+         if (def) {
+diff --git a/options/m_option.h b/options/m_option.h
+index bcdc1f9fcc..ce9ddab4bb 100644
+--- a/options/m_option.h
++++ b/options/m_option.h
+@@ -253,6 +253,11 @@ union m_option_value {
+     struct m_channels channels;
+ };
+ 
++// Keep fully zeroed instance of m_option_value to use as a default value, before
++// any specific union member is used. C standard says that `= {0}` activates and
++// initializes only the first member of the union, leaving padding bits undefined.
++static const union m_option_value m_option_value_default;
++
+ ////////////////////////////////////////////////////////////////////////////
+ 
+ struct m_option_action {
+diff --git a/options/m_property.c b/options/m_property.c
+index fa91fd1162..ff088efb6c 100644
+--- a/options/m_property.c
++++ b/options/m_property.c
+@@ -38,7 +38,7 @@ static int m_property_multiply(struct mp_log *log,
+                                const struct m_property *prop_list,
+                                const char *property, double f, void *ctx)
+ {
+-    union m_option_value val = {0};
++    union m_option_value val = m_option_value_default;
+     struct m_option opt = {0};
+     int r;
+ 
+@@ -98,7 +98,7 @@ static int do_action(const struct m_property *prop_list, const char *name,
+ int m_property_do(struct mp_log *log, const struct m_property *prop_list,
+                   const char *name, int action, void *arg, void *ctx)
+ {
+-    union m_option_value val = {0};
++    union m_option_value val = m_option_value_default;
+     int r;
+ 
+     struct m_option opt = {0};
+@@ -545,7 +545,7 @@ int m_property_read_list(int action, void *arg, int count,
+                 r = get_item(n, M_PROPERTY_GET_TYPE, &opt, ctx);
+                 if (r != M_PROPERTY_OK)
+                     goto err;
+-                union m_option_value val = {0};
++                union m_option_value val = m_option_value_default;
+                 r = get_item(n, M_PROPERTY_GET, &val, ctx);
+                 if (r != M_PROPERTY_OK)
+                     goto err;
+diff --git a/osdep/compiler.h b/osdep/compiler.h
+index 37431e60eb..6b76a4b719 100644
+--- a/osdep/compiler.h
++++ b/osdep/compiler.h
+@@ -13,6 +13,16 @@
+ #define MP_FALLTHROUGH do {} while (0)
+ #endif
+ 
++#ifndef __has_attribute
++#define __has_attribute(x) 0
++#endif
++
++#if __has_attribute(nonstring)
++#define MP_NONSTRING __attribute__((nonstring))
++#else
++#define MP_NONSTRING
++#endif
++
+ // Broken crap with __USE_MINGW_ANSI_STDIO
+ #if defined(__MINGW32__) && defined(__GNUC__) && !defined(__clang__)
+ #undef PRINTF_ATTRIBUTE
+diff --git a/player/client.c b/player/client.c
+index 2a581a6bda..095a9f5367 100644
+--- a/player/client.c
++++ b/player/client.c
+@@ -1402,7 +1402,7 @@ static void getproperty_fn(void *arg)
+     struct getproperty_request *req = arg;
+     const struct m_option *type = get_mp_type_get(req->format);
+ 
+-    union m_option_value xdata = {0};
++    union m_option_value xdata = m_option_value_default;
+     void *data = req->data ? req->data : &xdata;
+ 
+     int err = -1;
+@@ -1560,6 +1560,8 @@ int mpv_observe_property(mpv_handle *ctx, uint64_t userdata,
+         .type = type,
+         .change_ts = 1, // force initial event
+         .refcount = 1,
++        .value = m_option_value_default,
++        .value_ret = m_option_value_default,
+     };
+     ctx->properties_change_ts += 1;
+     MP_TARRAY_APPEND(ctx, ctx->properties, ctx->num_properties, prop);
+@@ -1682,7 +1684,7 @@ static void send_client_property_changes(struct mpv_handle *ctx)
+         bool changed = false;
+         if (prop->format) {
+             const struct m_option *type = prop->type;
+-            union m_option_value val = {0};
++            union m_option_value val = m_option_value_default;
+             struct getproperty_request req = {
+                 .mpctx = ctx->mpctx,
+                 .name = prop->name,
+diff --git a/player/command.c b/player/command.c
+index 0eb13a7eed..f9add30bc2 100644
+--- a/player/command.c
++++ b/player/command.c
+@@ -3419,7 +3419,7 @@ static int mp_property_option_info(void *ctx, struct m_property *prop,
+             return M_PROPERTY_UNKNOWN;
+         const struct m_option *opt = co->opt;
+ 
+-        union m_option_value def = {0};
++        union m_option_value def = m_option_value_default;
+         const void *def_ptr = m_config_get_co_default(mpctx->mconfig, co);
+         if (def_ptr && opt->type->size > 0)
+             memcpy(&def, def_ptr, opt->type->size);
+@@ -4725,7 +4725,7 @@ static void cmd_cycle_values(void *p)
+         return;
+     }
+ 
+-    union m_option_value curval = {0};
++    union m_option_value curval = m_option_value_default;
+     r = mp_property_do(name, M_PROPERTY_GET, &curval, mpctx);
+     if (r <= 0) {
+         show_property_status(cmd, name, r);
+@@ -4734,7 +4734,7 @@ static void cmd_cycle_values(void *p)
+ 
+     int current = -1;
+     for (int n = first; n < cmd->num_args; n++) {
+-        union m_option_value val = {0};
++        union m_option_value val = m_option_value_default;
+         if (m_option_parse(mpctx->log, &prop, bstr0(name),
+                            bstr0(cmd->args[n].v.s), &val) < 0)
+             continue;
+@@ -5138,7 +5138,7 @@ static void cmd_change_list(void *p)
+         return;
+     }
+ 
+-    union m_option_value val = {0};
++    union m_option_value val = m_option_value_default;
+     if (mp_property_do(name, M_PROPERTY_GET, &val, mpctx) <= 0) {
+         set_osd_msg(mpctx, osdl, osd_duration, "Could not read: '%s'", name);
+         cmd->success = false;
+diff --git a/player/loadfile.c b/player/loadfile.c
+index 851413bb06..b3b6d452ed 100644
+--- a/player/loadfile.c
++++ b/player/loadfile.c
+@@ -1276,6 +1276,10 @@ static void open_demux_reentrant(struct MPContext *mpctx)
+     if (!mpctx->open_active)
+         start_open(mpctx, url, mpctx->playing->stream_flags, false);
+ 
++    // If thread failed to start, cancel the playback
++    if (!mpctx->open_active)
++        goto cancel;
++
+     // User abort should cancel the opener now.
+     mp_cancel_set_parent(mpctx->open_cancel, mpctx->playback_abort);
+ 
+@@ -1294,6 +1298,7 @@ static void open_demux_reentrant(struct MPContext *mpctx)
+         mpctx->error_playing = mpctx->open_res_error;
+     }
+ 
++cancel:
+     cancel_open(mpctx); // cleanup
+ }
+ 
+diff --git a/video/image_writer.c b/video/image_writer.c
+index 81a696e5d3..93341b3d2e 100644
+--- a/video/image_writer.c
++++ b/video/image_writer.c
+@@ -40,6 +40,7 @@
+ #include "common/msg.h"
+ #include "image_writer.h"
+ #include "mpv_talloc.h"
++#include "misc/lavc_compat.h"
+ #include "video/fmt-conversion.h"
+ #include "video/img_format.h"
+ #include "video/mp_image.h"
+@@ -521,9 +522,12 @@ free_data:
+ 
+ static int get_encoder_format(const AVCodec *codec, int srcfmt, bool highdepth)
+ {
+-    const enum AVPixelFormat *pix_fmts = codec->pix_fmts;
++    const enum AVPixelFormat *pix_fmts;
++    int ret = mp_avcodec_get_supported_config(NULL, codec,
++                                              AV_CODEC_CONFIG_PIX_FORMAT,
++                                              (const void **)&pix_fmts);
+     int current = 0;
+-    for (int n = 0; pix_fmts && pix_fmts[n] != AV_PIX_FMT_NONE; n++) {
++    for (int n = 0; ret >= 0 && pix_fmts && pix_fmts[n] != AV_PIX_FMT_NONE; n++) {
+         int fmt = pixfmt2imgfmt(pix_fmts[n]);
+         if (!fmt)
+             continue;
+diff --git a/video/out/vo_lavc.c b/video/out/vo_lavc.c
+index 74b5477be7..a782d2f326 100644
+--- a/video/out/vo_lavc.c
++++ b/video/out/vo_lavc.c
+@@ -25,6 +25,7 @@
+ 
+ #include "common/common.h"
+ #include "options/options.h"
++#include "misc/lavc_compat.h"
+ #include "video/fmt-conversion.h"
+ #include "video/mp_image.h"
+ #include "mpv_talloc.h"
+@@ -127,8 +128,11 @@ static int reconfig2(struct vo *vo, struct mp_image *img)
+     tb.num = 24000;
+     tb.den = 1;
+ 
+-    const AVRational *rates = encoder->codec->supported_framerates;
+-    if (rates && rates[0].den)
++    const AVRational *rates;
++    int ret = mp_avcodec_get_supported_config(encoder, NULL,
++                                              AV_CODEC_CONFIG_FRAME_RATE,
++                                              (const void **)&rates);
++    if (ret >= 0 && rates && rates[0].den)
+         tb = rates[av_find_nearest_q_idx(tb, rates)];
+ 
+     encoder->time_base = av_inv_q(tb);
+@@ -159,12 +163,15 @@ static int query_format(struct vo *vo, int format)
+     struct priv *vc = vo->priv;
+ 
+     enum AVPixelFormat pix_fmt = imgfmt2pixfmt(format);
+-    const enum AVPixelFormat *p = vc->enc->encoder->codec->pix_fmts;
++    const enum AVPixelFormat *p;
++    int ret = mp_avcodec_get_supported_config(vc->enc->encoder, NULL,
++                                              AV_CODEC_CONFIG_PIX_FORMAT,
++                                              (const void **)&p);
+ 
+-    if (!p)
++    if (ret >= 0 && !p)
+         return 1;
+ 
+-    while (*p != AV_PIX_FMT_NONE) {
++    while (ret >= 0 && p && *p != AV_PIX_FMT_NONE) {
+         if (*p == pix_fmt)
+             return 1;
+         p++;
